@@ -1,0 +1,31 @@
+services:
+  db-estoque:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: estoque
+    ports:
+      - "3308:3306"
+    volumes:
+      - db_estoque_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  estoque:
+    build: .
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL: jdbc:mysql://db-estoque:3306/estoque
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      db-estoque:
+        condition: service_healthy
+
+volumes:
+  db_estoque_data:
