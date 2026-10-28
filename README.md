@@ -3,10 +3,10 @@
 Microsserviço de **estoque** (peças, insumos e reservas por ordem de serviço) da Mecânica FIAP.
 Extraído do módulo `estoque` do monólito [`fiap-mecanica`](https://github.com/ArthurPeruzzo/fiap-mecanica).
 
-> **Status:** passo 1 de 5 da extração. Este serviço já expõe o CRUD de peças e insumos
-> (`/peca`, `/insumo`) e traz o domínio de reservas, mas a API interna usada pela ordem de
-> serviço (catálogo e reservas) ainda não foi exposta e a API principal ainda usa o módulo
-> embutido.
+> **Status:** passo 2 de 5 da extração. Além do CRUD de peças e insumos (`/peca`, `/insumo`), o serviço
+> expõe a API de reservas usada pela ordem de serviço (`/reserva/**`), que o monólito já consome via
+> REST. A API de catálogo (consulta de preço por ids) ainda não foi exposta: o monólito segue lendo o
+> catálogo do módulo embutido.
 
 ## Stack
 
@@ -30,8 +30,34 @@ O serviço **não tem tabela de usuários**. Valida o JWT emitido pela API princ
 `JWT_SECRET` e issuer `mecanica-fiap`) e usa a claim `roles`:
 
 - `/peca/**` e `/insumo/**` exigem `ROLE_ADMINISTRADOR`.
+- `/reserva/**` **não exige autenticação**. É uma API interna, chamada só pelo `fiap-mecanica` (inclusive na
+  aprovação/recusa de orçamento por link, que não tem usuário autenticado). A proteção é de rede, não de
+  aplicação: ver "Premissa de rede" abaixo.
 - `/actuator/health/**` e o Swagger são públicos.
 - Qualquer outra rota é negada.
+
+## API de reservas (interna)
+
+| Método e rota | Descrição |
+|---|---|
+| `PUT /reserva/ordem-servico/{id}/itens` | Define, em lote (peças e insumos), a quantidade **total** reservada por item. Idempotente e atômico: se um item não tem saldo (422) ou não existe (404), nenhum é reservado. |
+| `POST /reserva/ordem-servico/{id}/confirmar` | Converte as reservas ativas em baixa definitiva. |
+| `POST /reserva/ordem-servico/{id}/liberar` | Devolve ao saldo tudo que estava reservado (usado também como compensação). |
+
+Corpo do `PUT`: `{"itens":[{"tipoItem":"PECA","itemId":5,"quantidadeTotal":3}]}`. Cada operação roda numa única
+transação (`@Transactional` no controller).
+
+### Premissa de rede (`/reserva/**`)
+
+Como o endpoint não tem autenticação, qualquer cliente que o alcance pode reservar, confirmar ou liberar estoque
+de qualquer OS (os ids são sequenciais). Por isso ele **não pode ser exposto fora do cluster**:
+
+- no k8s, o Service do estoque deve ser `ClusterIP`, sem rota no API Gateway nem Ingress para `/reserva/**`;
+- opcionalmente, uma `NetworkPolicy` liberando só os pods do `fiap-mecanica`;
+- no docker-compose local a porta 8081 fica publicada na máquina, o que é aceitável só em desenvolvimento.
+
+Pendente (a implementar depois): autenticação serviço a serviço (ex.: JWT com role de serviço) caso o isolamento
+de rede deixe de bastar.
 
 ## Configuração
 

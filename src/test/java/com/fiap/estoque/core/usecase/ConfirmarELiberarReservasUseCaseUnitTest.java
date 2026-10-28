@@ -3,6 +3,7 @@ package com.fiap.estoque.core.usecase;
 import com.fiap.estoque.core.domain.*;
 import com.fiap.estoque.core.gateway.ItemEstoqueGateway;
 import com.fiap.estoque.core.gateway.ReservaGateway;
+import com.fiap.estoque.core.gateway.TransacaoGateway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -20,6 +21,7 @@ class ConfirmarELiberarReservasUseCaseUnitTest {
 
     @Mock private ItemEstoqueGateway itemEstoqueGateway;
     @Mock private ReservaGateway reservaGateway;
+    private final TransacaoGateway transacaoGateway = Runnable::run;
 
     private static final Long ORDEM_ID = 1L;
 
@@ -42,7 +44,7 @@ class ConfirmarELiberarReservasUseCaseUnitTest {
     void confirmar_shouldBaixarEstoqueEConfirmarReservas() {
         stubReservasAtivas();
 
-        new ConfirmarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway).confirmar(ORDEM_ID);
+        new ConfirmarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway, transacaoGateway).confirmar(ORDEM_ID);
 
         assertEquals(7, peca.getEstoqueTotal());
         assertEquals(0, peca.getQuantidadeReservada());
@@ -59,7 +61,7 @@ class ConfirmarELiberarReservasUseCaseUnitTest {
     void liberar_shouldDevolverAoDisponivelSemAlterarTotal() {
         stubReservasAtivas();
 
-        new LiberarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway).liberar(ORDEM_ID);
+        new LiberarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway, transacaoGateway).liberar(ORDEM_ID);
 
         assertEquals(10, peca.getEstoqueTotal());
         assertEquals(0, peca.getQuantidadeReservada());
@@ -74,8 +76,8 @@ class ConfirmarELiberarReservasUseCaseUnitTest {
     void shouldNaoFazerNadaQuandoNaoHaReservasAtivas() {
         Mockito.when(reservaGateway.listarAtivasPorOrdemDeServico(ORDEM_ID)).thenReturn(List.of());
 
-        new ConfirmarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway).confirmar(ORDEM_ID);
-        new LiberarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway).liberar(ORDEM_ID);
+        new ConfirmarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway, transacaoGateway).confirmar(ORDEM_ID);
+        new LiberarReservasOrdemDeServicoUseCase(itemEstoqueGateway, reservaGateway, transacaoGateway).liberar(ORDEM_ID);
 
         Mockito.verifyNoInteractions(itemEstoqueGateway);
         Mockito.verify(reservaGateway, Mockito.never()).salvar(Mockito.any());
