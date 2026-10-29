@@ -30,8 +30,8 @@ O serviço **não tem tabela de usuários**. Valida o JWT emitido pela API princ
 `JWT_SECRET` e issuer `mecanica-fiap`) e usa a claim `roles`:
 
 - `/peca/**` e `/insumo/**` exigem `ROLE_ADMINISTRADOR`.
-- `/reserva/**` **não exige autenticação**. É uma API interna, chamada só pelo `fiap-mecanica` (inclusive na
-  aprovação/recusa de orçamento por link, que não tem usuário autenticado). A proteção é de rede, não de
+- `/reserva/**` e `/catalogo/**` **não exigem autenticação**. São APIs internas, chamadas só pelo `fiap-mecanica`
+  (inclusive na aprovação/recusa de orçamento por link, que não tem usuário autenticado). A proteção é de rede, não de
   aplicação: ver "Premissa de rede" abaixo.
 - `/actuator/health/**` e o Swagger são públicos.
 - Qualquer outra rota é negada.
@@ -47,7 +47,18 @@ O serviço **não tem tabela de usuários**. Valida o JWT emitido pela API princ
 Corpo do `PUT`: `{"itens":[{"tipoItem":"PECA","itemId":5,"quantidadeTotal":3}]}`. Cada operação roda numa única
 transação (`@Transactional` no controller).
 
-### Premissa de rede (`/reserva/**`)
+## API de catálogo (interna)
+
+Consulta em lote usada pela ordem de serviço para validar a existência e obter o preço de peças e insumos.
+
+| Método e rota | Descrição |
+|---|---|
+| `GET /catalogo/pecas?ids=1,2,3` | Retorna `[{"id":1,"preco":89.90}]`. Ids inexistentes são omitidos; quem consulta decide o que fazer com a diferença. |
+| `GET /catalogo/insumos?ids=1,2,3` | Idem, para insumos. |
+
+Sem o parâmetro `ids` a resposta é 400.
+
+### Premissa de rede (`/reserva/**` e `/catalogo/**`)
 
 Como o endpoint não tem autenticação, qualquer cliente que o alcance pode reservar, confirmar ou liberar estoque
 de qualquer OS (os ids são sequenciais). Por isso ele **não pode ser exposto fora do cluster**:

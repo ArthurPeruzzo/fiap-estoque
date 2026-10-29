@@ -6,6 +6,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
@@ -69,6 +70,14 @@ public class GlobalExceptionHandler {
         log.warn("Método {} não suportado", e.getMethod());
         return ResponseEntity.status(BAD_REQUEST).body(
                 new ExceptionDto(BAD_REQUEST, LocalDateTime.now().format(FORMATTER), "Método " + e.getMethod() + " não suportado")
+        );
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ExceptionDto> missingServletRequestParameterExceptionHandler(MissingServletRequestParameterException e){
+        log.warn("Parâmetro obrigatório ausente: {}", e.getParameterName());
+        return ResponseEntity.status(BAD_REQUEST).body(
+                new ExceptionDto(BAD_REQUEST, LocalDateTime.now().format(FORMATTER), "O parâmetro '" + e.getParameterName() + "' deve ser informado")
         );
     }
 

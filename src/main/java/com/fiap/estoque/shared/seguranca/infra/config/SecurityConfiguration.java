@@ -27,8 +27,9 @@ public class SecurityConfiguration {
             "/swagger-ui/**",
             "/favicon.ico",
             "/actuator/health/**",
-            // Interna: só o fiap-mecanica deve alcançar. Não expor no API Gateway/Ingress (ver README).
-            "/reserva/**"
+            // Internas: só o fiap-mecanica deve alcançar. Não expor no API Gateway/Ingress (ver README).
+            "/reserva/**",
+            "/catalogo/**"
     };
 
     private static final String[] ENDPOINTS_ADMINISTRADOR = {
