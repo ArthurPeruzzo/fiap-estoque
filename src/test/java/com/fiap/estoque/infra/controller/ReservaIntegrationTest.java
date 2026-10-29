@@ -137,4 +137,41 @@ class ReservaIntegrationTest extends AbstractContainer {
         Assertions.assertEquals(0, pecaReservada(1));
         Assertions.assertEquals(List.of("LIBERADA", "LIBERADA"), statusReservas());
     }
+
+    private static String lotePeca(int quantidadeTotal) {
+        return "{\"itens\":[{\"tipoItem\":\"PECA\",\"itemId\":1,\"quantidadeTotal\":" + quantidadeTotal + "}]}";
+    }
+
+    @Test
+    void shouldAjustarAReservaAoAumentarDiminuirEZerarAQuantidade() {
+        criarPeca(1, 10);
+
+        requisicao().body(lotePeca(3)).when().put(URL + "/itens").then().statusCode(204);
+        requisicao().body(lotePeca(5)).when().put(URL + "/itens").then().statusCode(204);
+        Assertions.assertEquals(5, pecaReservada(1));
+
+        requisicao().body(lotePeca(3)).when().put(URL + "/itens").then().statusCode(204);
+        Assertions.assertEquals(3, pecaReservada(1));
+        Assertions.assertEquals(List.of("ATIVA"), statusReservas());
+
+        requisicao().body(lotePeca(0)).when().put(URL + "/itens").then().statusCode(204);
+        Assertions.assertEquals(0, pecaReservada(1));
+        Assertions.assertEquals(10, pecaEstoque(1));
+        Assertions.assertEquals(List.of("LIBERADA"), statusReservas());
+    }
+
+    @Test
+    void shouldRecusarQuandoOutraOrdemJaReservouOSaldoDisponivel() {
+        criarPeca(1, 5);
+        String outraOrdem = "/reserva/ordem-servico/8/itens";
+
+        requisicao().body(lotePeca(4)).when().put(URL + "/itens").then().statusCode(204);
+
+        requisicao().body(lotePeca(2)).when().put(outraOrdem).then().statusCode(422);
+        Assertions.assertEquals(4, pecaReservada(1));
+
+        requisicao().body(lotePeca(1)).when().put(outraOrdem).then().statusCode(204);
+        Assertions.assertEquals(5, pecaReservada(1));
+        Assertions.assertEquals(5, pecaEstoque(1));
+    }
 }

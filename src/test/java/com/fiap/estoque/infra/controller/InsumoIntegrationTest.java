@@ -275,6 +275,37 @@ class InsumoIntegrationTest extends AbstractContainer {
     }
 
     @Test
+    void shouldReturn422WhenUpdateEstoqueParaMenosQueOReservado() {
+        String token = tokenTestHelper.administrador();
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Óleo 5W30","descricao":"Sintético","preco":35.00,"quantidadeEstoque":10,"unidadeMedida":"LITRO"}
+                        """)
+                .when().post("/insumo").then().statusCode(201);
+        Long id = insumoRepository.findAll().getFirst().getId();
+        RestAssured.given().contentType("application/json")
+                .body("{\"itens\":[{\"tipoItem\":\"INSUMO\",\"itemId\":" + id + ",\"quantidadeTotal\":4}]}")
+                .when().put("/reserva/ordem-servico/7/itens").then().statusCode(204);
+
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Óleo 5W30","descricao":"Sintético","preco":35.00,"quantidadeEstoque":3,"unidadeMedida":"LITRO"}
+                        """)
+                .when().put("/insumo/" + id)
+                .then().statusCode(422)
+                .body("message", Matchers.equalTo("A quantidade em estoque não pode ser menor que a quantidade reservada para ordens de serviço"));
+        Assertions.assertEquals(10, insumoRepository.findById(id).orElseThrow().getQuantidadeEstoque());
+
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Óleo 5W30","descricao":"Sintético","preco":35.00,"quantidadeEstoque":4,"unidadeMedida":"LITRO"}
+                        """)
+                .when().put("/insumo/" + id)
+                .then().statusCode(204);
+        Assertions.assertEquals(4, insumoRepository.findById(id).orElseThrow().getQuantidadeEstoque());
+    }
+
+    @Test
     void shouldReturn404WhenInsumoNotFoundOnUpdate() {
         String token = obterToken();
 

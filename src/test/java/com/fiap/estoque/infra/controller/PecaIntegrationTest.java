@@ -263,6 +263,37 @@ class PecaIntegrationTest extends AbstractContainer {
     }
 
     @Test
+    void shouldReturn422WhenUpdateEstoqueParaMenosQueOReservado() {
+        String token = obterToken();
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Filtro de óleo","descricao":"Filtro 1.0","preco":29.90,"quantidadeEstoque":10}
+                        """)
+                .when().post("/peca").then().statusCode(201);
+        Long id = pecaRepository.findAll().getFirst().getId();
+        RestAssured.given().contentType("application/json")
+                .body("{\"itens\":[{\"tipoItem\":\"PECA\",\"itemId\":" + id + ",\"quantidadeTotal\":4}]}")
+                .when().put("/reserva/ordem-servico/7/itens").then().statusCode(204);
+
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Filtro de óleo","descricao":"Filtro 1.0","preco":29.90,"quantidadeEstoque":3}
+                        """)
+                .when().put("/peca/" + id)
+                .then().statusCode(422)
+                .body("message", Matchers.equalTo("A quantidade em estoque não pode ser menor que a quantidade reservada para ordens de serviço"));
+        Assertions.assertEquals(10, pecaRepository.findById(id).orElseThrow().getQuantidadeEstoque());
+
+        RestAssured.given().contentType("application/json").header("Authorization", "Bearer " + token)
+                .body("""
+                        {"nome":"Filtro de óleo","descricao":"Filtro 1.0","preco":29.90,"quantidadeEstoque":4}
+                        """)
+                .when().put("/peca/" + id)
+                .then().statusCode(204);
+        Assertions.assertEquals(4, pecaRepository.findById(id).orElseThrow().getQuantidadeEstoque());
+    }
+
+    @Test
     void shouldReturn404WhenPecaNotFoundOnUpdate() {
         String token = obterToken();
 
