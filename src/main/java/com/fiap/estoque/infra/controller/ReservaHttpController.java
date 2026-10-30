@@ -40,8 +40,6 @@ public class ReservaHttpController {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Itens reservados com sucesso"),
             @ApiResponse(responseCode = "400", description = "Parâmetros de entrada inválidos"),
-            @ApiResponse(responseCode = "401", description = "Não autenticado"),
-            @ApiResponse(responseCode = "403", description = "Acesso negado — requer perfil de serviço interno"),
             @ApiResponse(responseCode = "404", description = "Peça ou insumo não encontrado"),
             @ApiResponse(responseCode = "422", description = "Estoque insuficiente para algum dos itens")
     })
@@ -57,9 +55,7 @@ public class ReservaHttpController {
 
     @Operation(summary = "Confirmar reservas", description = "Converte as reservas ativas da ordem de serviço em baixa definitiva do estoque")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Reservas confirmadas com sucesso"),
-            @ApiResponse(responseCode = "401", description = "Não autenticado"),
-            @ApiResponse(responseCode = "403", description = "Acesso negado — requer perfil de serviço interno")
+            @ApiResponse(responseCode = "204", description = "Reservas confirmadas com sucesso")
     })
     @PostMapping("/confirmar")
     public ResponseEntity<Void> confirmar(@PathVariable Long ordemServicoId) {
@@ -69,9 +65,7 @@ public class ReservaHttpController {
 
     @Operation(summary = "Liberar reservas", description = "Devolve ao saldo disponível tudo que estava reservado para a ordem de serviço")
     @ApiResponses(value = {
-            @ApiResponse(responseCode = "204", description = "Reservas liberadas com sucesso"),
-            @ApiResponse(responseCode = "401", description = "Não autenticado"),
-            @ApiResponse(responseCode = "403", description = "Acesso negado — requer perfil de serviço interno")
+            @ApiResponse(responseCode = "204", description = "Reservas liberadas com sucesso")
     })
     @PostMapping("/liberar")
     public ResponseEntity<Void> liberar(@PathVariable Long ordemServicoId) {
