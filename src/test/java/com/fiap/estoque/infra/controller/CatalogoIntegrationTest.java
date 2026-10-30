@@ -1,6 +1,8 @@
 package com.fiap.estoque.infra.controller;
 
 import com.fiap.estoque.resources.testcontainer.AbstractContainer;
+import com.fiap.estoque.resources.TokenTestHelper;
+import org.springframework.context.annotation.Import;
 import io.restassured.RestAssured;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,10 +14,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 @ActiveProfiles("integration-test")
+@Import(TokenTestHelper.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class CatalogoIntegrationTest extends AbstractContainer {
 
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private TokenTestHelper tokenTestHelper;
 
     @LocalServerPort
     private int port;
@@ -29,8 +33,9 @@ class CatalogoIntegrationTest extends AbstractContainer {
     }
 
     @Test
-    void shouldConsultarPecasEmLoteSemAutenticacaoOmitindoIdsInexistentes() {
+    void shouldConsultarPecasEmLoteOmitindoIdsInexistentes() {
         RestAssured.given()
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoCatalogo())
                 .when().get("/catalogo/pecas?ids=1,2,999")
                 .then().statusCode(200)
                 .body("size()", Matchers.equalTo(2))
@@ -41,6 +46,7 @@ class CatalogoIntegrationTest extends AbstractContainer {
     @Test
     void shouldConsultarInsumosEmLote() {
         RestAssured.given()
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoCatalogo())
                 .when().get("/catalogo/insumos?ids=1")
                 .then().statusCode(200)
                 .body("size()", Matchers.equalTo(1))
@@ -51,6 +57,7 @@ class CatalogoIntegrationTest extends AbstractContainer {
     @Test
     void shouldReturnListaVaziaQuandoNenhumIdExiste() {
         RestAssured.given()
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoCatalogo())
                 .when().get("/catalogo/pecas?ids=999")
                 .then().statusCode(200)
                 .body("size()", Matchers.equalTo(0));
@@ -59,6 +66,7 @@ class CatalogoIntegrationTest extends AbstractContainer {
     @Test
     void shouldReturn400SemIds() {
         RestAssured.given()
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoCatalogo())
                 .when().get("/catalogo/pecas")
                 .then().statusCode(400);
     }

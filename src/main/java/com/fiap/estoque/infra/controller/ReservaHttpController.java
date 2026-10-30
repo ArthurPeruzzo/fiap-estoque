@@ -40,6 +40,8 @@ public class ReservaHttpController {
     @ApiResponses(value = {
             @ApiResponse(responseCode = "204", description = "Itens reservados com sucesso"),
             @ApiResponse(responseCode = "400", description = "Parâmetros de entrada inválidos"),
+            @ApiResponse(responseCode = "401", description = "Token de serviço ausente, inválido ou expirado"),
+            @ApiResponse(responseCode = "403", description = "Token de serviço sem o escopo reserva:escrita"),
             @ApiResponse(responseCode = "404", description = "Peça ou insumo não encontrado"),
             @ApiResponse(responseCode = "422", description = "Estoque insuficiente para algum dos itens")
     })

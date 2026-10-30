@@ -1,6 +1,8 @@
 package com.fiap.estoque.infra.controller;
 
 import com.fiap.estoque.resources.testcontainer.AbstractContainer;
+import com.fiap.estoque.resources.TokenTestHelper;
+import org.springframework.context.annotation.Import;
 import io.restassured.RestAssured;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +16,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.util.List;
 
 @ActiveProfiles("integration-test")
+@Import(TokenTestHelper.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class ReservaIntegrationTest extends AbstractContainer {
 
@@ -21,6 +24,7 @@ class ReservaIntegrationTest extends AbstractContainer {
     private static final String URL = "/reserva/ordem-servico/" + ORDEM_ID;
 
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private TokenTestHelper tokenTestHelper;
 
     @LocalServerPort
     private int port;
@@ -55,7 +59,8 @@ class ReservaIntegrationTest extends AbstractContainer {
     }
 
     private io.restassured.specification.RequestSpecification requisicao() {
-        return RestAssured.given().contentType("application/json");
+        return RestAssured.given().contentType("application/json")
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoReserva());
     }
 
     private static final String LOTE_PECA_E_INSUMO = """

@@ -18,18 +18,20 @@ import org.springframework.beans.factory.ObjectProvider;
 public class SecurityConfiguration {
 
     private final ObjectProvider<JwtAuthenticationFilter> jwtAuthenticationFilter;
+    private final ObjectProvider<ServicoAuthenticationFilter> servicoAuthenticationFilter;
 
     protected static final String ADMINISTRADOR = "ADMINISTRADOR";
+
+    // Permissões do token de serviço (claim "scope"); o filtro as expõe com o prefixo SCOPE_.
+    protected static final String ESCOPO_RESERVA = "SCOPE_reserva:escrita";
+    protected static final String ESCOPO_CATALOGO = "SCOPE_catalogo:leitura";
 
     static final String[] ENDPOINTS_SEM_AUTENTICACAO = {
             "/v3/api-docs/**",
             "/swagger-ui.html",
             "/swagger-ui/**",
             "/favicon.ico",
-            "/actuator/health/**",
-            // Internas: só o fiap-mecanica deve alcançar. Não expor no API Gateway/Ingress (ver README).
-            "/reserva/**",
-            "/catalogo/**"
+            "/actuator/health/**"
     };
 
     private static final String[] ENDPOINTS_ADMINISTRADOR = {
@@ -45,6 +47,9 @@ public class SecurityConfiguration {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(ENDPOINTS_SEM_AUTENTICACAO).permitAll()
                         .requestMatchers(ENDPOINTS_ADMINISTRADOR).hasRole(ADMINISTRADOR)
+                        // Internas: token de serviço emitido pelo fiap-mecanica, com o escopo da rota.
+                        .requestMatchers("/reserva/**").hasAuthority(ESCOPO_RESERVA)
+                        .requestMatchers("/catalogo/**").hasAuthority(ESCOPO_CATALOGO)
                         .anyRequest().denyAll()
                 )
                 .exceptionHandling(exception ->
@@ -60,6 +65,8 @@ public class SecurityConfiguration {
                         })
                 );
         jwtAuthenticationFilter.ifAvailable(filter ->
+                httpSecurity.addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class));
+        servicoAuthenticationFilter.ifAvailable(filter ->
                 httpSecurity.addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class));
         return httpSecurity.build();
     }

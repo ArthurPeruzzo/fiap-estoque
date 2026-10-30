@@ -272,6 +272,7 @@ class PecaIntegrationTest extends AbstractContainer {
                 .when().post("/peca").then().statusCode(201);
         Long id = pecaRepository.findAll().getFirst().getId();
         RestAssured.given().contentType("application/json")
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoReserva())
                 .body("{\"itens\":[{\"tipoItem\":\"PECA\",\"itemId\":" + id + ",\"quantidadeTotal\":4}]}")
                 .when().put("/reserva/ordem-servico/7/itens").then().statusCode(204);
 

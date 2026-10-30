@@ -284,6 +284,7 @@ class InsumoIntegrationTest extends AbstractContainer {
                 .when().post("/insumo").then().statusCode(201);
         Long id = insumoRepository.findAll().getFirst().getId();
         RestAssured.given().contentType("application/json")
+                .header("Authorization", "Bearer " + tokenTestHelper.servicoReserva())
                 .body("{\"itens\":[{\"tipoItem\":\"INSUMO\",\"itemId\":" + id + ",\"quantidadeTotal\":4}]}")
                 .when().put("/reserva/ordem-servico/7/itens").then().statusCode(204);
 

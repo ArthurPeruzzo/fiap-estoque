@@ -29,12 +29,33 @@ Clean Architecture, igual ao monólito: `core/` (domínio, casos de uso, portas)
 O serviço **não tem tabela de usuários**. Valida o JWT emitido pela API principal (mesmo
 `JWT_SECRET` e issuer `mecanica-fiap`) e usa a claim `roles`:
 
-- `/peca/**` e `/insumo/**` exigem `ROLE_ADMINISTRADOR`.
-- `/reserva/**` e `/catalogo/**` **não exigem autenticação**. São APIs internas, chamadas só pelo `fiap-mecanica`
-  (inclusive na aprovação/recusa de orçamento por link, que não tem usuário autenticado). A proteção é de rede, não de
-  aplicação: ver "Premissa de rede" abaixo.
+- `/peca/**` e `/insumo/**` exigem `ROLE_ADMINISTRADOR` (JWT de usuário).
+- `/reserva/**` e `/catalogo/**` são APIs internas e exigem um **token de serviço** emitido pelo `fiap-mecanica`
+  (ver "Autenticação serviço a serviço"). O JWT de usuário não vale nelas, e o token de serviço não vale nas
+  demais rotas.
 - `/actuator/health/**` e o Swagger são públicos.
 - Qualquer outra rota é negada.
+
+### Autenticação serviço a serviço
+
+O `fiap-mecanica` gera um JWT novo a cada chamada ao estoque (sem estado e sem chamada a servidor de
+autenticação). Ele é assinado com um segredo próprio, `SERVICE_JWT_SECRET`, **diferente** do `JWT_SECRET` dos
+usuários, para que um não possa forjar o outro.
+
+| Claim | Valor | Validação aqui |
+|---|---|---|
+| `iss` | `mecanica-fiap-servicos` | obrigatória e igual |
+| `aud` | `fiap-estoque` | obrigatória e igual (um token de outro destino é recusado) |
+| `sub` | `svc:fiap-mecanica` | identifica o chamador (log/auditoria) |
+| `scope` | `reserva:escrita` ou `catalogo:leitura`, separados por espaço | `/reserva/**` exige `reserva:escrita`; `/catalogo/**` exige `catalogo:leitura` |
+| `iat`, `exp`, `jti` | agora, agora + 90 s, UUID | `exp` com tolerância de relógio de 10 s |
+
+Respostas: sem token ou token inválido/expirado/de outro destino → **401**; token válido sem o escopo da
+rota → **403**.
+
+Limites conhecidos: o token trafega sem TLS dentro do cluster (a janela de reuso de um token capturado é de
+90 s, e `confirmar`/`liberar`/`reservar` são idempotentes), e o HS256 é simétrico (quem valida também poderia
+assinar). O próximo passo, quando houver mais serviços, é assinatura assimétrica ou mTLS no mesh.
 
 ## API de reservas (interna)
 
@@ -58,17 +79,14 @@ Consulta em lote usada pela ordem de serviço para validar a existência e obter
 
 Sem o parâmetro `ids` a resposta é 400.
 
-### Premissa de rede (`/reserva/**` e `/catalogo/**`)
+### Isolamento de rede (defesa em profundidade)
 
-Como o endpoint não tem autenticação, qualquer cliente que o alcance pode reservar, confirmar ou liberar estoque
-de qualquer OS (os ids são sequenciais). Por isso ele **não pode ser exposto fora do cluster**:
+A autenticação acima é a proteção principal, mas as rotas internas continuam **fora do alcance externo**:
 
-- no k8s, o Service do estoque deve ser `ClusterIP`, sem rota no API Gateway nem Ingress para `/reserva/**`;
+- no k8s, o Service do estoque deve ser `ClusterIP`, sem rota no API Gateway nem Ingress para `/reserva/**` e
+  `/catalogo/**`;
 - opcionalmente, uma `NetworkPolicy` liberando só os pods do `fiap-mecanica`;
 - no docker-compose local a porta 8081 fica publicada na máquina, o que é aceitável só em desenvolvimento.
-
-Pendente (a implementar depois): autenticação serviço a serviço (ex.: JWT com role de serviço) caso o isolamento
-de rede deixe de bastar.
 
 ## Configuração
 
@@ -77,12 +95,13 @@ de rede deixe de bastar.
 | `DB_URL` | `jdbc:mysql://127.0.0.1:3308/estoque` | JDBC URL |
 | `DB_USERNAME` | `root` | Usuário do banco |
 | `DB_PASSWORD` | `root` | Senha do banco |
-| `JWT_SECRET` | — | Base64URL, **o mesmo da API principal** |
+| `JWT_SECRET` | — | Base64URL, **o mesmo da API principal** (JWT de usuário) |
+| `SERVICE_JWT_SECRET` | — | Base64URL (≥ 32 bytes), **o mesmo do `fiap-mecanica`** e diferente do `JWT_SECRET` (token de serviço) |
 
 ## Executar
 
 ```bash
-cp .env.example .env        # ajuste JWT_SECRET
+cp .env.example .env        # ajuste JWT_SECRET e SERVICE_JWT_SECRET
 docker compose up --build   # MySQL em 127.0.0.1:3308, serviço em http://localhost:8081
 ```
 
@@ -91,7 +110,7 @@ Swagger: `http://localhost:8081/swagger-ui.html`.
 Local (sem Docker para o serviço), com o MySQL do compose no ar:
 
 ```bash
-JWT_SECRET=<mesmo-segredo> ./mvnw spring-boot:run
+JWT_SECRET=<mesmo-segredo> SERVICE_JWT_SECRET=<segredo-de-servico> ./mvnw spring-boot:run
 ```
 
 ## Testes

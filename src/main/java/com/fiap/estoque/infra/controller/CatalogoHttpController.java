@@ -34,7 +34,9 @@ public class CatalogoHttpController {
             description = "Retorna id e preço das peças informadas. Ids inexistentes são omitidos da resposta.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Consulta realizada com sucesso"),
-            @ApiResponse(responseCode = "400", description = "Ids não informados")
+            @ApiResponse(responseCode = "400", description = "Ids não informados"),
+            @ApiResponse(responseCode = "401", description = "Token de serviço ausente, inválido ou expirado"),
+            @ApiResponse(responseCode = "403", description = "Token de serviço sem o escopo catalogo:leitura")
     })
     @GetMapping("/pecas")
     public ResponseEntity<List<ItemCatalogoResponseJson>> consultarPecas(@RequestParam List<Long> ids) {
@@ -45,7 +47,9 @@ public class CatalogoHttpController {
             description = "Retorna id e preço dos insumos informados. Ids inexistentes são omitidos da resposta.")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Consulta realizada com sucesso"),
-            @ApiResponse(responseCode = "400", description = "Ids não informados")
+            @ApiResponse(responseCode = "400", description = "Ids não informados"),
+            @ApiResponse(responseCode = "401", description = "Token de serviço ausente, inválido ou expirado"),
+            @ApiResponse(responseCode = "403", description = "Token de serviço sem o escopo catalogo:leitura")
     })
     @GetMapping("/insumos")
     public ResponseEntity<List<ItemCatalogoResponseJson>> consultarInsumos(@RequestParam List<Long> ids) {
