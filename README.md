@@ -68,6 +68,24 @@ assinar). O próximo passo, quando houver mais serviços, é assinatura assimét
 Corpo do `PUT`: `{"itens":[{"tipoItem":"PECA","itemId":5,"quantidadeTotal":3}]}`. Cada operação roda numa única
 transação (`@Transactional` no controller).
 
+### Liberação assíncrona (RabbitMQ)
+
+Além do `POST .../liberar`, o estoque **consome** o comando de liberação enviado pelo `fiap-mecanica` quando uma
+OS é cancelada (decisão no [ADR-0008](../fiap-mecanica/docs/adr/0008-mensageria-rabbitmq-outbox.md) do monólito):
+
+| Item | Valor |
+|---|---|
+| Exchange (direct) | `estoque.comandos`, chave `reserva.liberar` |
+| Fila | `estoque.liberar-reserva` (declarada por este serviço, com DLX `estoque.comandos.dlx`) |
+| DLQ | `estoque.liberar-reserva.dlq` |
+| Corpo | `{"ordemServicoId": 7}` |
+
+O listener (`LiberarReservaListener`) executa o mesmo caso de uso do endpoint HTTP. A entrega é *pelo menos uma vez*
+e a liberação só age em reservas `ATIVA`, então mensagem duplicada ou para uma OS sem reservas não altera nada.
+Falha ao processar tem 3 retries (1 s, 2 s, 4 s) e depois a mensagem vai para a DLQ; corpo malformado vai direto
+para a DLQ, sem retry. Mensagens na DLQ pedem investigação manual (painel do RabbitMQ em `http://localhost:15672`).
+O usuário deste serviço no broker só enxerga recursos `estoque.*`.
+
 ## API de catálogo (interna)
 
 Consulta em lote usada pela ordem de serviço para validar a existência e obter o preço de peças e insumos.
@@ -97,11 +115,13 @@ A autenticação acima é a proteção principal, mas as rotas internas continua
 | `DB_PASSWORD` | `root` | Senha do banco |
 | `JWT_SECRET` | — | Base64URL, **o mesmo da API principal** (JWT de usuário) |
 | `SERVICE_JWT_SECRET` | — | Base64URL (≥ 32 bytes), **o mesmo do `fiap-mecanica`** e diferente do `JWT_SECRET` (token de serviço) |
+| `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | — | Usuário deste serviço no broker (obrigatório); o mesmo par de `RABBITMQ_ESTOQUE_*` no `.env` do `fiap-mecanica`, que sobe o RabbitMQ |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` | `localhost` / `5672` / `fiap` | Localização do broker |
 
 ## Executar
 
 ```bash
-cp .env.example .env        # ajuste JWT_SECRET e SERVICE_JWT_SECRET
+cp .env.example .env        # ajuste JWT_SECRET, SERVICE_JWT_SECRET e RABBITMQ_*
 docker compose up --build   # MySQL em 127.0.0.1:3308, serviço em http://localhost:8081
 ```
 
