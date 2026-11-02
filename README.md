@@ -174,12 +174,17 @@ checagens) é configurada no GitHub.
 
 ### Pontos de atenção
 
-- **Disco do broker (EBS CSI):** o driver usa as credenciais do nó (`LabRole`) e **não foi validado nesta conta**. Se não
-  funcionar, o StatefulSet fica `Pending` e o passo `rollout status` do CD falha. Plano B: RabbitMQ numa EC2 com disco EBS.
-  Sem disco persistente, a queda do broker perderia mensagens já marcadas como enviadas pela outbox do `fiap-mecanica`.
+- **Disco do broker (EBS CSI) e o hop limit do IMDS:** o driver roda em pods e obtém as credenciais da `LabRole` pelo serviço
+  de metadados (IMDS) da instância. Os nós do cluster nascem com `HttpPutResponseHopLimit = 1` e IMDSv2 obrigatório; um pod
+  fica um salto além da instância, então o controller não alcança o IMDS (`no EC2 IMDS role found ... context deadline
+  exceeded`), entra em `CrashLoopBackOff` e o add-on fica preso em `CREATING`. O CD ajusta o hop limit para **2** antes de
+  instalar o add-on (passo idempotente, reaplicado a cada deploy); com isso o controller sobe e o add-on fica `ACTIVE`. Vale
+  enquanto os nós existirem; a correção definitiva é um launch template com hop limit 2 no node group do
+  `fiap-mecanica-infra-k8s`. Plano B, se o disco não funcionar: RabbitMQ numa EC2 com disco EBS. Sem disco persistente, a
+  queda do broker perderia mensagens já marcadas como enviadas pela outbox do `fiap-mecanica`.
 - **Sem SonarQube** (nem outra análise estática) ainda.
-- **Pendências em outros repositórios:** o `fiap-mecanica` precisa de `ESTOQUE_URL` (o padrão é `localhost:8081`),
-  `RABBITMQ_*` e o ajuste do passo que recria o ConfigMap; o API Gateway precisa de rotas para `/peca` e `/insumo`.
+- **Integração com o `fiap-mecanica`:** feita no CD dele (`ESTOQUE_URL` interno, `RABBITMQ_*` e as rotas `/peca` e `/insumo` do
+  API Gateway). O monólito deve ser o **último** a subir, para encontrar o Service do estoque na primeira passada.
 
 ## Observabilidade
 

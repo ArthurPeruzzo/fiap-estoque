@@ -144,6 +144,26 @@ jobs:
         aws-region: ${{ env.AWS_REGION }}
     - name: Apontar kubectl para o cluster EKS
       run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region ${{ env.AWS_REGION }}
+    # Os pods ficam um salto de rede além da instância. Com IMDSv2 obrigatório e hop limit 1 (o padrão destes nós), o
+    # controller do EBS CSI não alcança o serviço de metadados, não obtém as credenciais da LabRole e fica em
+    # CrashLoopBackOff ("no EC2 IMDS role found ... context deadline exceeded"), o que trava o add-on em CREATING.
+    # Hop limit 2 resolve. O passo é idempotente (só altera instâncias abaixo de 2). Vale enquanto os nós existirem: um
+    # nó substituído volta ao padrão e é corrigido no próximo deploy; a correção definitiva seria um launch template
+    # no node group, no repositório do cluster (fiap-mecanica-infra-k8s).
+    - name: Garantir o hop limit 2 do IMDS nos nós do cluster (idempotente)
+      run: |
+        IDS=$(aws ec2 describe-instances --region ${{ env.AWS_REGION }} \
+          --filters "Name=tag:eks:cluster-name,Values=$EKS_CLUSTER_NAME" "Name=instance-state-name,Values=running" \
+          --query 'Reservations[].Instances[] | [?MetadataOptions.HttpPutResponseHopLimit < `2`].InstanceId' --output text)
+        if [ -z "$IDS" ]; then
+          echo "Todos os nós já têm hop limit >= 2."
+          exit 0
+        fi
+        for ID in $IDS; do
+          echo "Ajustando o hop limit do IMDS de $ID para 2"
+          aws ec2 modify-instance-metadata-options --region ${{ env.AWS_REGION }} \
+            --instance-id "$ID" --http-put-response-hop-limit 2 > /dev/null
+        done
     # O disco persistente do broker precisa do driver CSI do EBS. O add-on usa as credenciais do nó (LabRole):
     # a Academy Lab não permite criar o IAM role dedicado. Se o driver não funcionar nesta conta, o
     # StatefulSet fica Pending e o `rollout status` abaixo falha de forma visível (plano B: RabbitMQ em EC2).

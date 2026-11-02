@@ -54,9 +54,13 @@ aplicado se testes ou cobertura falharem.
   Impô-la exigiria NLB interno + VPC Link.
 - **Broker acoplado ao deploy do estoque** enquanto não migrar para a plataforma; um deploy do estoque reaplica o
   broker (idempotente, mas é acoplamento).
-- **EBS CSI não validado nesta conta.** O driver usa as credenciais do nó (`LabRole`); se não funcionar, o
-  StatefulSet fica `Pending` e o CD falha de forma visível. Plano B: RabbitMQ numa EC2 com disco EBS.
-  Com broker sem disco persistente, uma queda perderia mensagens já marcadas como enviadas pela outbox.
+- **EBS CSI depende do hop limit do IMDS dos nós.** O driver usa as credenciais da `LabRole` (a Academy não permite
+  criar IAM role dedicado) pelo serviço de metadados da instância. Os nós nascem com hop limit 1, e nesse caso o
+  controller, que roda em pod, não alcança o IMDS: fica em `CrashLoopBackOff` e o add-on trava em `CREATING` (observado
+  na primeira execução do CD nesta conta). O CD passou a ajustar o hop limit para 2 antes de instalar o add-on
+  (idempotente). É uma correção que vale enquanto os nós existirem; a definitiva é um launch template no node group do
+  repositório do cluster. Plano B se o disco não funcionar: RabbitMQ numa EC2 com disco EBS. Com broker sem disco
+  persistente, uma queda perderia mensagens já marcadas como enviadas pela outbox.
 - Credenciais da Academy expiram (~4 h): o `scripts/refresh-aws-secrets.sh` as republica nos cinco repositórios.
 - Ainda **sem SonarQube** neste serviço (ver README).
 

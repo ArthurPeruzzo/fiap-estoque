@@ -15,8 +15,13 @@ spec:
         app: rabbitmq
     spec:
       # O volume EBS nasce com dono root; o grupo do usuario "rabbitmq" (999) precisa poder escrever nele.
+      # OnRootMismatch: o fsGroup so e aplicado (recursivamente) se a raiz do volume nao bater. Com o padrao (Always)
+      # o Kubernetes refaz as permissoes de TODO o conteudo a cada montagem e deixa o .erlang.cookie legivel pelo grupo;
+      # o Erlang recusa subir ("Cookie file ... must be accessible by owner only"). Resultado: o broker subia na primeira
+      # vez e nunca mais depois de recriar o pod (drenagem de no, atualizacao do StatefulSet).
       securityContext:
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
       terminationGracePeriodSeconds: 60
       containers:
         - name: rabbitmq
@@ -49,6 +54,9 @@ spec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
             failureThreshold: 30
             periodSeconds: 10
+            # O CLI do RabbitMQ (uma VM Erlang nova a cada chamada) leva alguns segundos; com o padrão de 1 s a probe
+            # sempre estoura e o pod nunca fica Ready, mesmo com o broker já aceitando conexões.
+            timeoutSeconds: 10
           livenessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
