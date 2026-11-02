@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fiap-estoque
+  namespace: fiap-estoque
+  labels:
+    app: fiap-estoque
+spec:
+  selector:
+    matchLabels:
+      app: fiap-estoque
+  template:
+    metadata:
+      labels:
+        app: fiap-estoque
+    spec:
+      containers:
+        - name: fiap-estoque
+          # Placeholder: o cd.yml troca pela imagem versionada publicada no ECR (kubectl set image).
+          image: "fiap-estoque:placeholder"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: fiap-estoque-config
+            - secretRef:
+                name: fiap-estoque-secret
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "768Mi"
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8081
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8081
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8081
+            periodSeconds: 10

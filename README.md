@@ -97,14 +97,16 @@ Consulta em lote usada pela ordem de serviço para validar a existência e obter
 
 Sem o parâmetro `ids` a resposta é 400.
 
-### Isolamento de rede (defesa em profundidade)
+### Exposição e isolamento de rede
 
-A autenticação acima é a proteção principal, mas as rotas internas continuam **fora do alcance externo**:
-
-- no k8s, o Service do estoque deve ser `ClusterIP`, sem rota no API Gateway nem Ingress para `/reserva/**` e
-  `/catalogo/**`;
-- opcionalmente, uma `NetworkPolicy` liberando só os pods do `fiap-mecanica`;
-- no docker-compose local a porta 8081 fica publicada na máquina, o que é aceitável só em desenvolvimento.
+- O Service é `LoadBalancer` **só** para que o API Gateway alcance `/peca/**` e `/insumo/**` (administrador). O
+  `fiap-mecanica` não usa o ELB: chama `http://fiap-estoque.fiap-estoque.svc.cluster.local`.
+- Como o ELB é público, `/reserva/**` e `/catalogo/**` também ficam alcançáveis diretamente; o que as protege é o token de
+  serviço (sem `aud`/`scope` corretos: 401/403). A "entrada única" é o API Gateway por convenção. Impô-la exigiria NLB
+  interno + VPC Link (evolução registrada no [ADR-0001](docs/adr/0001-infraestrutura-propria-do-servico.md)).
+- Uma `NetworkPolicy` não foi aplicada: restringir a entrada aos pods do `fiap-mecanica` também bloquearia o tráfego
+  do ELB, e o VPC CNI do cluster não tem a política de rede habilitada.
+- No docker-compose local a porta 8081 fica publicada na máquina, o que é aceitável só em desenvolvimento.
 
 ## Configuração
 
@@ -117,6 +119,82 @@ A autenticação acima é a proteção principal, mas as rotas internas continua
 | `SERVICE_JWT_SECRET` | — | Base64URL (≥ 32 bytes), **o mesmo do `fiap-mecanica`** e diferente do `JWT_SECRET` (token de serviço) |
 | `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | — | Usuário deste serviço no broker (obrigatório); o mesmo par de `RABBITMQ_ESTOQUE_*` no `.env` do `fiap-mecanica`, que sobe o RabbitMQ |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` | `localhost` / `5672` / `fiap` | Localização do broker |
+
+## Infraestrutura e deploy
+
+Este repositório é dono de tudo o que é específico do estoque (decisões no [ADR-0001](docs/adr/0001-infraestrutura-propria-do-servico.md)):
+
+| Onde | O quê |
+|---|---|
+| `infra/terraform/app-infra` | Repositório ECR `fiap-estoque` e instância RDS MySQL 8.4 **própria** (`fiap-estoque-db`, banco `estoque`). State `tfstate/estoque.tfstate`. |
+| `k8s/` | Namespace `fiap-estoque`, Deployment, Service `LoadBalancer`, HPA (1–3 réplicas, CPU 70%). ConfigMap e Secret são gerados pelo CD. |
+| `k8s/rabbitmq/` | RabbitMQ no cluster (namespace `mensageria`): StatefulSet + disco EBS gp3, Services `ClusterIP` e Job que cria o vhost `fiap` e os usuários de menor privilégio. |
+| `.github/workflows` | `build-test` (testes + cobertura mínima de 80%), `ci` (pull request) e `cd` (merge na `main`). |
+
+**Compartilhado, fora deste repositório:** VPC, subnets e o cluster EKS (`fiap-mecanica-infra-k8s`). Numa conta zerada o CD dele
+roda primeiro; este módulo lê o state dele (`tfstate/terraform.tfstate`).
+
+### Ordem de deploy numa conta zerada
+
+O CD do estoque depende **só do cluster** (lê o state do `fiap-mecanica-infra-k8s`); não depende do banco nem do código do
+`fiap-mecanica`. Por isso ele roda **antes** do monólito, e o monólito sobe numa passada só, já encontrando o Service do
+estoque (para as rotas `/peca` e `/insumo` do gateway):
+
+```
+1º  fiap-mecanica-infra-k8s   (bucket, VPC, cluster)
+2º  fiap-estoque              (RDS próprio, RabbitMQ, estoque)   ┐ independentes entre si:
+    fiap-mecanica-infra-db    (RDS do monólito)                  │ podem rodar em paralelo
+    fiap-mecanica-lambda                                         ┘
+3º  fiap-mecanica             (cria o gateway já com as rotas do estoque)
+```
+
+### Pipelines
+
+- **CI (pull request):** build, testes e `jacoco:check` (**falha abaixo de 80%** das linhas), build da imagem Docker e
+  `terraform fmt/validate/plan`.
+- **CD (`main`):** `build-test` → `app-infra-apply` (ECR + RDS) → `docker-build-push` (tag = versão do `pom.xml`; não
+  sobrescreve tag já publicada, então **suba a versão a cada merge**) → `rabbitmq-deploy` → `k8s-deploy`.
+- A cobertura aparece no resumo de cada execução e o relatório HTML é publicado como artefato (`jacoco-report`).
+
+### GitHub Secrets do repositório
+
+| Secret | Uso |
+|---|---|
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Credenciais da Academy Lab (expiram; `scripts/refresh-aws-secrets.sh` as republica). |
+| `TF_VAR_DB_USERNAME`, `TF_VAR_DB_PASSWORD` | Usuário/senha master do RDS **do estoque** (credencial própria, diferente da do `fiap-mecanica`). |
+| `JWT_SECRET` | O mesmo do `fiap-mecanica` (JWT de usuário). |
+| `SERVICE_JWT_SECRET` | O mesmo do `fiap-mecanica`, diferente do `JWT_SECRET` (token de serviço). |
+| `NEW_RELIC_LICENSE_KEY` | A mesma do `fiap-mecanica` (traces e métricas OTLP). |
+| `RABBITMQ_ADMIN_PASSWORD` | Administrador do broker. |
+| `RABBITMQ_ESTOQUE_PASSWORD` | Senha do usuário `estoque` no broker (este serviço). |
+| `RABBITMQ_MECANICA_PASSWORD` | Senha do usuário `mecanica` no broker; o Job a cria e o `fiap-mecanica` precisa do mesmo valor. |
+
+Use valores **alfanuméricos** nas senhas do RabbitMQ (viram JSON no Job de inicialização). A proteção da `main` (PR obrigatório e
+checagens) é configurada no GitHub.
+
+### Pontos de atenção
+
+- **Disco do broker (EBS CSI):** o driver usa as credenciais do nó (`LabRole`) e **não foi validado nesta conta**. Se não
+  funcionar, o StatefulSet fica `Pending` e o passo `rollout status` do CD falha. Plano B: RabbitMQ numa EC2 com disco EBS.
+  Sem disco persistente, a queda do broker perderia mensagens já marcadas como enviadas pela outbox do `fiap-mecanica`.
+- **Sem SonarQube** (nem outra análise estática) ainda.
+- **Pendências em outros repositórios:** o `fiap-mecanica` precisa de `ESTOQUE_URL` (o padrão é `localhost:8081`),
+  `RABBITMQ_*` e o ajuste do passo que recria o ConfigMap; o API Gateway precisa de rotas para `/peca` e `/insumo`.
+
+## Observabilidade
+
+Mesma configuração do `fiap-mecanica` (Fase 3): traces e métricas exportados por OTLP para a New Relic, com o serviço
+aparecendo como `estoque`. A chave vem de `NEW_RELIC_LICENSE_KEY` (Secret no cluster; nunca no código) e os logs ECS
+carregam `trace.id`/`span.id`, correlacionando logs e traces.
+
+- **Propagação:** o serviço continua o trace recebido no cabeçalho W3C `traceparent` (teste
+  `ContinuaTraceRecebidoIntegrationTest`). O `fiap-mecanica` envia esse cabeçalho nas chamadas HTTP de catálogo e reserva.
+- **Mensageria:** o trace atravessa a outbox e o RabbitMQ. O relay do `fiap-mecanica` coloca o `traceparent` da requisição de
+  cancelamento no cabeçalho da mensagem e o listener (`spring.rabbitmq.listener.simple.observation-enabled`) abre o span do
+  consumo como filho dele: cancelar a OS e liberar a reserva no estoque aparecem no **mesmo trace** (teste
+  `LiberarReservaListenerIntegrationTest#shouldContinuarOTraceRecebidoNaMensagem`).
+- **Local:** sem `NEW_RELIC_LICENSE_KEY` a exportação falha com autenticação recusada (apenas avisos nos logs); defina a
+  chave ou ignore os avisos. Nos testes a exportação fica desligada.
 
 ## Executar
 
@@ -134,6 +212,8 @@ JWT_SECRET=<mesmo-segredo> SERVICE_JWT_SECRET=<segredo-de-servico> ./mvnw spring
 ```
 
 ## Testes
+
+O build exige **80% de cobertura de linhas** (`./mvnw verify` aplica o `jacoco:check`; hoje ~97%). Relatório em `target/site/jacoco/index.html`.
 
 ```bash
 JAVA_HOME=/home/arthur/.jdks/jdk-25 ./mvnw test                         # tudo (integração exige Docker)

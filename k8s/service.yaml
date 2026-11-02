@@ -1,0 +1,17 @@
+# LoadBalancer: so as rotas administrativas (/peca, /insumo) precisam ser alcancadas de fora, pelo
+# API Gateway. O fiap-mecanica NAO usa o ELB: fala com o estoque pelo endereco interno
+#   http://fiap-estoque.fiap-estoque.svc.cluster.local
+# As rotas /reserva/** e /catalogo/** so aceitam o token de servico (ADR-0007), mesmo que o ELB seja publico.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fiap-estoque
+  namespace: fiap-estoque
+spec:
+  type: LoadBalancer
+  selector:
+    app: fiap-estoque
+  ports:
+    - port: 80
+      targetPort: 8081
+      protocol: TCP

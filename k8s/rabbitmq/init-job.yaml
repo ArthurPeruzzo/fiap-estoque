@@ -1,0 +1,32 @@
+# Cria o vhost e os usuarios de menor privilegio pela API de gerenciamento. O script vem do ConfigMap
+# "rabbitmq-init-script" (gerado pelo cd.yml a partir de k8s/rabbitmq/init.sh) e as senhas do Secret
+# "rabbitmq-secret". Idempotente; o CD apaga e recria o Job a cada deploy (um Job nao e editavel).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rabbitmq-init
+  namespace: mensageria
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: curlimages/curl:8.11.1
+          command: ["sh", "/scripts/init.sh"]
+          env:
+            - name: RABBITMQ_HOST
+              value: rabbitmq.mensageria.svc.cluster.local
+            - name: RABBITMQ_VHOST
+              value: fiap
+          envFrom:
+            - secretRef:
+                name: rabbitmq-secret
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: rabbitmq-init-script

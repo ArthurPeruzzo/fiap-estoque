@@ -8,6 +8,9 @@ import io.restassured.RestAssured;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Message;
@@ -44,8 +47,10 @@ import static org.junit.jupiter.api.Assertions.*;
         "estoque.mensageria.listener.enabled=true",
         "spring.rabbitmq.listener.simple.retry.max-retries=2",
         "spring.rabbitmq.listener.simple.retry.initial-interval=50ms",
-        "spring.rabbitmq.listener.simple.retry.max-interval=100ms"
+        "spring.rabbitmq.listener.simple.retry.max-interval=100ms",
+        "management.tracing.sampling.probability=1.0"
 })
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class LiberarReservaListenerIntegrationTest extends AbstractContainer {
 
@@ -183,6 +188,22 @@ class LiberarReservaListenerIntegrationTest extends AbstractContainer {
         Mockito.verify(reservaGateway, Mockito.times(3)).listarAtivasPorOrdemDeServico(ORDEM_ID);
         assertEquals(3, pecaReservada());
         assertEquals(List.of("ATIVA"), statusReservas());
+    }
+
+    @Test
+    void shouldContinuarOTraceRecebidoNaMensagem(CapturedOutput output) {
+        String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+        Message mensagem = MessageBuilder.withBody("{\"ordemServicoId\":7}".getBytes(StandardCharsets.UTF_8))
+                .setContentType(MessageProperties.CONTENT_TYPE_JSON)
+                .setHeader("traceparent", "00-" + traceId + "-00f067aa0ba902b7-01")
+                .build();
+
+        rabbitTemplate.send(exchange, routingKey, mensagem);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(0, pecaReservada()));
+        // O log "Liberando reservas ..." sai dentro do span do consumidor: carrega o trace id da mensagem, então o
+        // consumo aparece no MESMO trace do cancelamento que o originou (e não como um trace separado).
+        assertThat(output.getAll()).contains(traceId);
     }
 
     @Test
