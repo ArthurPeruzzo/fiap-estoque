@@ -49,6 +49,9 @@ spec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
             failureThreshold: 30
             periodSeconds: 10
+            # O CLI do RabbitMQ (uma VM Erlang nova a cada chamada) leva alguns segundos; com o padrão de 1 s a probe
+            # sempre estoura e o pod nunca fica Ready, mesmo com o broker já aceitando conexões.
+            timeoutSeconds: 10
           livenessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
