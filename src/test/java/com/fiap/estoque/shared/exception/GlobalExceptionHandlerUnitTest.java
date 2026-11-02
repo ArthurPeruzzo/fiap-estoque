@@ -9,7 +9,9 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -96,6 +98,20 @@ class GlobalExceptionHandlerUnitTest {
         assertNotNull(response.getBody());
         assertEquals(400, response.getBody().status());
         assertEquals("Método DELETE não suportado", response.getBody().message());
+        assertTrue(response.getBody().timestamp().matches(TIMESTAMP_PATTERN));
+    }
+
+    @Test
+    void httpMessageNotReadableExceptionHandler_shouldReturnBadRequestWithoutLeakingParserDetails() {
+        HttpMessageNotReadableException exception =
+                new HttpMessageNotReadableException("JSON parse error: valor interno", Mockito.mock(HttpInputMessage.class));
+
+        ResponseEntity<ExceptionDto> response = handler.httpMessageNotReadableExceptionHandler(exception);
+
+        assertEquals(400, response.getStatusCode().value());
+        assertNotNull(response.getBody());
+        assertEquals(400, response.getBody().status());
+        assertEquals("Corpo da requisição inválido ou malformado", response.getBody().message());
         assertTrue(response.getBody().timestamp().matches(TIMESTAMP_PATTERN));
     }
 

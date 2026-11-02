@@ -1,0 +1,12 @@
+# StorageClass propria do broker, apontando direto para o driver CSI do EBS. Nao depende da "gp2" padrao
+# do EKS (que usa o provisionador in-tree, removido nas versoes recentes do Kubernetes).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

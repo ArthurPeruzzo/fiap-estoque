@@ -1,0 +1,270 @@
+# CD — roda a cada push na main (ou seja, pós-merge de PR). Testa, aplica a infra própria do serviço
+# (Terraform: ECR + RDS), publica a imagem versionada e faz o deploy no cluster EKS (broker + estoque).
+#
+# Pré-requisito: o cluster precisa existir — o CD do fiap-mecanica-infra-k8s roda antes numa conta zerada
+# (este módulo lê VPC/subnets/SG/nome do cluster do state dele).
+
+name: CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+concurrency:
+  group: cd-${{ github.ref }}
+  # false de propósito: este workflow muda infraestrutura real (terraform apply, kubectl apply). Cancelar
+  # no meio pode deixar o state (sem lock) ou o cluster num estado parcialmente aplicado.
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+
+  # Nada é publicado nem aplicado se os testes ou o mínimo de 80% de cobertura falharem.
+  build-test:
+    uses: ./.github/workflows/build-test.yml
+
+  # Infra PRÓPRIA do estoque (infra/terraform/app-infra): repositório ECR e instância RDS dedicada.
+  app-infra-apply:
+    needs: build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: producao
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: infra/terraform/app-infra
+    env:
+      TF_VAR_db_username: ${{ secrets.TF_VAR_DB_USERNAME }}
+      TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+    outputs:
+      db_endpoint: ${{ steps.tf_outputs.outputs.db_endpoint }}
+      ecr_repo: ${{ steps.tf_outputs.outputs.ecr_repo }}
+      cluster_name: ${{ steps.tf_outputs.outputs.cluster_name }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+    # O bucket do backend é criado pelo CD do fiap-mecanica-infra-k8s. Passo idempotente aqui como rede de
+    # segurança: sem ele, um `terraform init` num bucket ainda inexistente derruba o pipeline.
+    - name: Garantir que o bucket do backend existe (idempotente)
+      run: |
+        aws s3api head-bucket --bucket fiap-mecanica --region ${{ env.AWS_REGION }} 2>/dev/null || \
+        aws s3api create-bucket --bucket fiap-mecanica --region ${{ env.AWS_REGION }}
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+    - name: Terraform init
+      run: terraform init
+    - name: Terraform apply
+      run: terraform apply -auto-approve
+    - name: Capturar outputs do Terraform
+      id: tf_outputs
+      run: |
+        echo "db_endpoint=$(terraform output -raw db_endpoint)" >> "$GITHUB_OUTPUT"
+        echo "ecr_repo=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+        echo "cluster_name=$(terraform output -raw eks_cluster_name)" >> "$GITHUB_OUTPUT"
+
+  docker-build-push:
+    # precisa do app-infra-apply: o ECR só existe depois que o apply terminar.
+    needs: [build-test, app-infra-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: producao
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up JDK 25
+      uses: actions/setup-java@v4
+      with:
+        java-version: '25'
+        distribution: 'temurin'
+        cache: maven
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+    - name: Login no ECR
+      uses: aws-actions/amazon-ecr-login@v2
+    - name: Ler versão do pom.xml
+      id: get_version
+      run: echo "version=$(./mvnw -q -Dexpression=project.version -DforceStdout help:evaluate)" >> "$GITHUB_OUTPUT"
+    - name: Impedir sobrescrita de uma tag já publicada
+      run: |
+        if aws ecr describe-images \
+            --repository-name fiap-estoque \
+            --region ${{ env.AWS_REGION }} \
+            --image-ids imageTag=${{ steps.get_version.outputs.version }} > /dev/null 2>&1; then
+          echo "::error::Tag ${{ steps.get_version.outputs.version }} já existe no ECR. Bump a versão em pom.xml antes de dar merge na main."
+          exit 1
+        fi
+    - name: Build da imagem
+      run: docker build -t ${{ needs.app-infra-apply.outputs.ecr_repo }}:${{ steps.get_version.outputs.version }} .
+    - name: Push da imagem
+      run: docker push ${{ needs.app-infra-apply.outputs.ecr_repo }}:${{ steps.get_version.outputs.version }}
+
+  # RabbitMQ no cluster (StatefulSet + disco EBS) + criação do vhost e dos usuários de menor privilégio.
+  # Mora aqui por enquanto, mas é um componente COMPARTILHADO (o fiap-mecanica publica nele e o futuro serviço
+  # de pagamento também) — candidato a migrar para o repositório de plataforma do cluster.
+  rabbitmq-deploy:
+    needs: app-infra-apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: producao
+    permissions:
+      contents: read
+    env:
+      EKS_CLUSTER_NAME: ${{ needs.app-infra-apply.outputs.cluster_name }}
+      RABBITMQ_ADMIN_PASSWORD: ${{ secrets.RABBITMQ_ADMIN_PASSWORD }}
+      RABBITMQ_MECANICA_PASSWORD: ${{ secrets.RABBITMQ_MECANICA_PASSWORD }}
+      RABBITMQ_ESTOQUE_PASSWORD: ${{ secrets.RABBITMQ_ESTOQUE_PASSWORD }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+    - name: Apontar kubectl para o cluster EKS
+      run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region ${{ env.AWS_REGION }}
+    # O disco persistente do broker precisa do driver CSI do EBS. O add-on usa as credenciais do nó (LabRole):
+    # a Academy Lab não permite criar o IAM role dedicado. Se o driver não funcionar nesta conta, o
+    # StatefulSet fica Pending e o `rollout status` abaixo falha de forma visível (plano B: RabbitMQ em EC2).
+    - name: Garantir o add-on EBS CSI (idempotente)
+      run: |
+        if aws eks describe-addon --cluster-name "$EKS_CLUSTER_NAME" --addon-name aws-ebs-csi-driver >/dev/null 2>&1; then
+          echo "Add-on aws-ebs-csi-driver já instalado."
+        else
+          aws eks create-addon --cluster-name "$EKS_CLUSTER_NAME" --addon-name aws-ebs-csi-driver
+          aws eks wait addon-active --cluster-name "$EKS_CLUSTER_NAME" --addon-name aws-ebs-csi-driver
+        fi
+    - name: Aplicar namespace, StorageClass e Services
+      run: |
+        kubectl apply -f k8s/rabbitmq/namespace.yaml
+        kubectl apply -f k8s/rabbitmq/storageclass.yaml
+        kubectl apply -f k8s/rabbitmq/service.yaml
+    - name: Gerar o Secret do broker (a partir dos GitHub Secrets, sem gravar em disco)
+      run: |
+        kubectl create secret generic rabbitmq-secret -n mensageria \
+          --from-literal=RABBITMQ_DEFAULT_USER="admin" \
+          --from-literal=RABBITMQ_DEFAULT_PASS="$RABBITMQ_ADMIN_PASSWORD" \
+          --from-literal=RABBITMQ_MECANICA_USERNAME="mecanica" \
+          --from-literal=RABBITMQ_MECANICA_PASSWORD="$RABBITMQ_MECANICA_PASSWORD" \
+          --from-literal=RABBITMQ_ESTOQUE_USERNAME="estoque" \
+          --from-literal=RABBITMQ_ESTOQUE_PASSWORD="$RABBITMQ_ESTOQUE_PASSWORD" \
+          --dry-run=client -o yaml | kubectl apply -f -
+    - name: Aplicar o StatefulSet e aguardar o broker
+      run: |
+        kubectl apply -f k8s/rabbitmq/statefulset.yaml
+        kubectl rollout status statefulset/rabbitmq -n mensageria --timeout=420s
+    - name: Criar o vhost e os usuários (Job idempotente)
+      run: |
+        kubectl create configmap rabbitmq-init-script -n mensageria \
+          --from-file=init.sh=k8s/rabbitmq/init.sh --dry-run=client -o yaml | kubectl apply -f -
+        # Job não é editável: apaga o anterior e recria.
+        kubectl delete job rabbitmq-init -n mensageria --ignore-not-found
+        kubectl apply -f k8s/rabbitmq/init-job.yaml
+        if ! kubectl wait --for=condition=complete job/rabbitmq-init -n mensageria --timeout=240s; then
+          kubectl logs job/rabbitmq-init -n mensageria --tail=50 || true
+          exit 1
+        fi
+
+  k8s-deploy:
+    needs: [docker-build-push, app-infra-apply, rabbitmq-deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: producao
+    permissions:
+      contents: read
+    env:
+      EKS_CLUSTER_NAME: ${{ needs.app-infra-apply.outputs.cluster_name }}
+      DB_USERNAME: ${{ secrets.TF_VAR_DB_USERNAME }}
+      DB_PASSWORD: ${{ secrets.TF_VAR_DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      SERVICE_JWT_SECRET: ${{ secrets.SERVICE_JWT_SECRET }}
+      RABBITMQ_ESTOQUE_PASSWORD: ${{ secrets.RABBITMQ_ESTOQUE_PASSWORD }}
+      NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    outputs:
+      # Hostname do ELB do Service — consumido pelo dono do API Gateway para rotear /peca e /insumo.
+      lb_hostname: ${{ steps.wait_lb.outputs.hostname }}
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+    - name: Apontar kubectl para o cluster EKS
+      run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region ${{ env.AWS_REGION }}
+    - name: Aplicar namespace
+      run: kubectl apply -f k8s/namespace.yaml
+    - name: Gerar e aplicar o Secret (a partir dos GitHub Secrets, sem gravar em disco)
+      run: |
+        kubectl create secret generic fiap-estoque-secret -n fiap-estoque \
+          --from-literal=DB_USERNAME="$DB_USERNAME" \
+          --from-literal=DB_PASSWORD="$DB_PASSWORD" \
+          --from-literal=JWT_SECRET="$JWT_SECRET" \
+          --from-literal=SERVICE_JWT_SECRET="$SERVICE_JWT_SECRET" \
+          --from-literal=RABBITMQ_USERNAME="estoque" \
+          --from-literal=RABBITMQ_PASSWORD="$RABBITMQ_ESTOQUE_PASSWORD" \
+          --from-literal=NEW_RELIC_LICENSE_KEY="$NEW_RELIC_LICENSE_KEY" \
+          --dry-run=client -o yaml | kubectl apply -f -
+    - name: Aplicar Service (antes do Deployment — só assim dá pra descobrir o hostname do LoadBalancer sem subir pods com config incompleta)
+      run: kubectl apply -f k8s/service.yaml
+    - name: Aguardar hostname do LoadBalancer
+      id: wait_lb
+      run: |
+        kubectl wait --for=jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
+          service/fiap-estoque -n fiap-estoque --timeout=180s
+        echo "hostname=$(kubectl get svc fiap-estoque -n fiap-estoque -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')" >> "$GITHUB_OUTPUT"
+    - name: Gerar ConfigMap (banco, broker e URL pública do Swagger, numa única passada)
+      env:
+        DB_ENDPOINT: ${{ needs.app-infra-apply.outputs.db_endpoint }}
+        LB_HOSTNAME: ${{ steps.wait_lb.outputs.hostname }}
+      run: |
+        kubectl create configmap fiap-estoque-config -n fiap-estoque \
+          --from-literal=DB_URL="jdbc:mysql://${DB_ENDPOINT}/estoque" \
+          --from-literal=PUBLIC_BASE_URL="http://${LB_HOSTNAME}" \
+          --from-literal=RABBITMQ_HOST="rabbitmq.mensageria.svc.cluster.local" \
+          --from-literal=RABBITMQ_PORT="5672" \
+          --from-literal=RABBITMQ_VHOST="fiap" \
+          --dry-run=client -o yaml | kubectl apply -f -
+    - name: Aplicar Deployment (pods já nascem com a config completa)
+      run: kubectl apply -f k8s/deployment.yaml
+    - name: Definir a versão da imagem publicada nesta run
+      run: kubectl set image deployment/fiap-estoque fiap-estoque=${{ needs.app-infra-apply.outputs.ecr_repo }}:${{ needs.docker-build-push.outputs.version }} -n fiap-estoque
+    - name: Aplicar HPA
+      run: kubectl apply -f k8s/hpa.yaml
+    - name: Aguardar rollout
+      run: kubectl rollout status deployment/fiap-estoque -n fiap-estoque --timeout=300s
+    - name: Publicar os endereços no resumo da run
+      env:
+        LB_HOSTNAME: ${{ steps.wait_lb.outputs.hostname }}
+      run: |
+        {
+          echo "### fiap-estoque"
+          echo ""
+          echo "- ELB (rotas administrativas, via API Gateway): \`http://${LB_HOSTNAME}\`"
+          echo "- Endereço interno (usado pelo fiap-mecanica): \`http://fiap-estoque.fiap-estoque.svc.cluster.local\`"
+          echo "- Swagger: \`http://${LB_HOSTNAME}/swagger-ui.html\`"
+        } >> "$GITHUB_STEP_SUMMARY"
