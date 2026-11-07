@@ -68,23 +68,26 @@ assinar). O próximo passo, quando houver mais serviços, é assinatura assimét
 Corpo do `PUT`: `{"itens":[{"tipoItem":"PECA","itemId":5,"quantidadeTotal":3}]}`. Cada operação roda numa única
 transação (`@Transactional` no controller).
 
-### Liberação assíncrona (RabbitMQ)
+### Comandos assíncronos e respostas da saga (RabbitMQ)
 
-Além do `POST .../liberar`, o estoque **consome** o comando de liberação enviado pelo `fiap-mecanica` quando uma
-OS é cancelada (decisão no [ADR-0008](../fiap-mecanica/docs/adr/0008-mensageria-rabbitmq-outbox.md) do monólito):
+O estoque **consome** dois comandos do `fiap-mecanica` (orquestrador da saga de pagamento, ver o
+[ADR-0009](../fiap-mecanica/docs/adr/0009-saga-de-pagamento-orquestrada.md) do monólito) e **responde** a cada um no
+exchange da OS:
 
-| Item | Valor |
-|---|---|
-| Exchange (direct) | `estoque.comandos`, chave `reserva.liberar` |
-| Fila | `estoque.liberar-reserva` (declarada por este serviço, com DLX `estoque.comandos.dlx`) |
-| DLQ | `estoque.liberar-reserva.dlq` |
-| Corpo | `{"ordemServicoId": 7}` |
+| Comando (exchange `estoque.comandos`, direct) | Chave | Fila (DLQ `<fila>.dlq`, DLX `estoque.comandos.dlx`) | Efeito | Resposta (exchange `ordemservico.eventos`) |
+|---|---|---|---|---|
+| Liberar reservas (OS cancelada) | `reserva.liberar` | `estoque.liberar-reserva` | mesmo caso de uso do `POST .../liberar` | `reserva.liberada` |
+| Confirmar baixa (pagamento aprovado) | `reserva.confirmar-baixa` | `estoque.confirmar-baixa` | mesmo caso de uso do `POST .../confirmar` | `baixa.confirmada` |
 
-O listener (`LiberarReservaListener`) executa o mesmo caso de uso do endpoint HTTP. A entrega é *pelo menos uma vez*
-e a liberação só age em reservas `ATIVA`, então mensagem duplicada ou para uma OS sem reservas não altera nada.
-Falha ao processar tem 3 retries (1 s, 2 s, 4 s) e depois a mensagem vai para a DLQ; corpo malformado vai direto
-para a DLQ, sem retry. Mensagens na DLQ pedem investigação manual (painel do RabbitMQ em `http://localhost:15672`).
-O usuário deste serviço no broker só enxerga recursos `estoque.*`.
+Corpo de comandos e respostas: `{"ordemServicoId": 7}`. Os listeners (`LiberarReservaListener` e
+`ConfirmarBaixaListener`) executam o caso de uso e só então publicam a resposta, esperando a confirmação do broker. A
+entrega é *pelo menos uma vez* e as duas ações só agem em reservas `ATIVA`, então duplicata ou OS sem reservas não altera o
+saldo; **a resposta é reenviada mesmo assim**, porque a anterior pode ter se perdido. Não há outbox aqui: se a resposta
+falhar (broker fora, ou a OS ainda não declarou a fila `ordemservico.respostas`), o comando é reprocessado. Falha ao
+processar tem 3 retries (1 s, 2 s, 4 s) e depois a mensagem vai para a DLQ; corpo malformado vai direto para a DLQ, sem
+retry. Mensagens na DLQ pedem investigação manual (painel do RabbitMQ em `http://localhost:15672`). O trace do comando
+continua na resposta (`traceparent`). O usuário deste serviço no broker enxerga os recursos `estoque.*` e publica em
+`ordemservico.eventos`.
 
 ## API de catálogo (interna)
 
@@ -168,6 +171,7 @@ estoque (para as rotas `/peca` e `/insumo` do gateway):
 | `RABBITMQ_ADMIN_PASSWORD` | Administrador do broker. |
 | `RABBITMQ_ESTOQUE_PASSWORD` | Senha do usuário `estoque` no broker (este serviço). |
 | `RABBITMQ_MECANICA_PASSWORD` | Senha do usuário `mecanica` no broker; o Job a cria e o `fiap-mecanica` precisa do mesmo valor. |
+| `RABBITMQ_COBRANCA_PASSWORD` | Senha do usuário `cobranca` no broker (opcional: sem ela o usuário não é criado); o `fiap-cobranca` precisa do mesmo valor. |
 
 Use valores **alfanuméricos** nas senhas do RabbitMQ (viram JSON no Job de inicialização). A proteção da `main` (PR obrigatório e
 checagens) é configurada no GitHub.

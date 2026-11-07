@@ -13,7 +13,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Topologia do lado do consumidor: a fila de comandos, a DLQ para o que esgotar as tentativas e as ligações.
+ * Topologia do lado do consumidor: as filas de comandos (liberar reserva e confirmar baixa), as DLQs para o que esgotar
+ * as tentativas e as ligações.
  * O exchange principal é declarado também pelo fiap-mecanica, com os mesmos argumentos.
  */
 @Configuration
@@ -55,6 +56,39 @@ public class EstoqueMensageriaConfig {
     Binding bindingLiberarReservaDlq(Queue filaLiberarReservaDlq, DirectExchange estoqueComandosDeadLetterExchange,
                                      @Value("${estoque.mensageria.routing-key.liberar-reserva}") String routingKey) {
         return BindingBuilder.bind(filaLiberarReservaDlq).to(estoqueComandosDeadLetterExchange).with(routingKey);
+    }
+
+    @Bean
+    Queue filaConfirmarBaixa(@Value("${estoque.mensageria.fila.confirmar-baixa}") String nome,
+                             @Value("${estoque.mensageria.exchange}") String exchange,
+                             @Value("${estoque.mensageria.routing-key.confirmar-baixa}") String routingKey) {
+        return QueueBuilder.durable(nome)
+                .deadLetterExchange(exchange + ".dlx")
+                .deadLetterRoutingKey(routingKey)
+                .build();
+    }
+
+    @Bean
+    Queue filaConfirmarBaixaDlq(@Value("${estoque.mensageria.fila.confirmar-baixa}") String nome) {
+        return QueueBuilder.durable(nome + ".dlq").build();
+    }
+
+    @Bean
+    Binding bindingConfirmarBaixa(Queue filaConfirmarBaixa, DirectExchange estoqueComandosExchange,
+                                  @Value("${estoque.mensageria.routing-key.confirmar-baixa}") String routingKey) {
+        return BindingBuilder.bind(filaConfirmarBaixa).to(estoqueComandosExchange).with(routingKey);
+    }
+
+    @Bean
+    Binding bindingConfirmarBaixaDlq(Queue filaConfirmarBaixaDlq, DirectExchange estoqueComandosDeadLetterExchange,
+                                     @Value("${estoque.mensageria.routing-key.confirmar-baixa}") String routingKey) {
+        return BindingBuilder.bind(filaConfirmarBaixaDlq).to(estoqueComandosDeadLetterExchange).with(routingKey);
+    }
+
+    /** Exchange das respostas ao orquestrador. Dono: fiap-mecanica (declara fila e ligações); aqui só o exchange, com os mesmos argumentos. */
+    @Bean
+    DirectExchange ordemServicoEventosExchange(@Value("${ordemservico.mensageria.exchange}") String nome) {
+        return new DirectExchange(nome, true, false);
     }
 
     @Bean

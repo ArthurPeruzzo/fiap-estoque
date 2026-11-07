@@ -132,6 +132,7 @@ jobs:
       RABBITMQ_ADMIN_PASSWORD: ${{ secrets.RABBITMQ_ADMIN_PASSWORD }}
       RABBITMQ_MECANICA_PASSWORD: ${{ secrets.RABBITMQ_MECANICA_PASSWORD }}
       RABBITMQ_ESTOQUE_PASSWORD: ${{ secrets.RABBITMQ_ESTOQUE_PASSWORD }}
+      RABBITMQ_COBRANCA_PASSWORD: ${{ secrets.RABBITMQ_COBRANCA_PASSWORD }}
 
     steps:
     - uses: actions/checkout@v4
@@ -189,6 +190,8 @@ jobs:
           --from-literal=RABBITMQ_MECANICA_PASSWORD="$RABBITMQ_MECANICA_PASSWORD" \
           --from-literal=RABBITMQ_ESTOQUE_USERNAME="estoque" \
           --from-literal=RABBITMQ_ESTOQUE_PASSWORD="$RABBITMQ_ESTOQUE_PASSWORD" \
+          --from-literal=RABBITMQ_COBRANCA_USERNAME="${RABBITMQ_COBRANCA_PASSWORD:+cobranca}" \
+          --from-literal=RABBITMQ_COBRANCA_PASSWORD="$RABBITMQ_COBRANCA_PASSWORD" \
           --dry-run=client -o yaml | kubectl apply -f -
     - name: Aplicar o StatefulSet e aguardar o broker
       run: |

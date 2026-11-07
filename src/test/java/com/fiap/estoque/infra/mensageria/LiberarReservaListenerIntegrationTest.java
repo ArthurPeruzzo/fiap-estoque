@@ -13,6 +13,9 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.DirectExchange;
+import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
@@ -85,9 +88,20 @@ class LiberarReservaListenerIntegrationTest extends AbstractContainer {
     @LocalServerPort
     private int port;
 
+    private static final String FILA_RESPOSTAS = "teste.respostas-da-os";
+
+    @Value("${ordemservico.mensageria.exchange}") private String exchangeRespostas;
+
     @BeforeEach
     void setup() {
         RestAssured.port = port;
+        // Faz o papel da fila ordemservico.respostas, que em producao e declarada pelo fiap-mecanica: sem ela a resposta
+        // do estoque volta como nao roteada.
+        Queue respostas = new Queue(FILA_RESPOSTAS, false);
+        amqpAdmin.declareQueue(respostas);
+        amqpAdmin.purgeQueue(FILA_RESPOSTAS, true);
+        DirectExchange exchangeDaOs = new DirectExchange(exchangeRespostas, true, false);
+        amqpAdmin.declareBinding(BindingBuilder.bind(respostas).to(exchangeDaOs).with("reserva.liberada"));
         amqpAdmin.purgeQueue(fila, true);
         amqpAdmin.purgeQueue(fila + ".dlq", true);
         jdbcTemplate.update("INSERT INTO peca (id, nome, descricao, preco, quantidade_estoque, quantidade_reservada) VALUES (1, 'Filtro', 'desc', 10.00, 10, 0)");
@@ -102,6 +116,7 @@ class LiberarReservaListenerIntegrationTest extends AbstractContainer {
 
     @AfterEach
     void limpar() {
+        amqpAdmin.deleteQueue(FILA_RESPOSTAS);
         amqpAdmin.purgeQueue(fila, true);
         amqpAdmin.purgeQueue(fila + ".dlq", true);
     }
@@ -136,6 +151,39 @@ class LiberarReservaListenerIntegrationTest extends AbstractContainer {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(0, pecaReservada()));
         assertEquals(List.of("LIBERADA"), statusReservas());
         assertEquals(10, pecaEstoque());
+    }
+
+    @Test
+    void shouldResponderReservaLiberadaAoOrquestradorDepoisDeLiberar() {
+        publicar("{\"ordemServicoId\":7}");
+
+        Message resposta = rabbitTemplate.receive(FILA_RESPOSTAS, Duration.ofSeconds(10).toMillis());
+        assertNotNull(resposta, "o estoque deveria responder ReservaLiberada");
+        assertEquals("{\"ordemServicoId\":7}", new String(resposta.getBody(), StandardCharsets.UTF_8));
+        assertEquals("RESERVA_LIBERADA", resposta.getMessageProperties().getType());
+        assertEquals(0, pecaReservada(), "a resposta so sai depois de liberar");
+    }
+
+    @Test
+    void shouldResponderDeNovoQuandoOComandoChegaEmDuplicata() {
+        publicar("{\"ordemServicoId\":7}");
+        publicar("{\"ordemServicoId\":7}");
+
+        // A duplicata nao altera o saldo, mas a resposta anterior pode ter se perdido: sai uma por comando.
+        assertNotNull(rabbitTemplate.receive(FILA_RESPOSTAS, Duration.ofSeconds(10).toMillis()));
+        assertNotNull(rabbitTemplate.receive(FILA_RESPOSTAS, Duration.ofSeconds(10).toMillis()));
+        assertEquals(10, pecaEstoque());
+    }
+
+    @Test
+    void shouldReprocessarQuandoARespostaNaoPodeSerEntregue() {
+        amqpAdmin.deleteQueue(FILA_RESPOSTAS); // a OS ainda nao declarou a fila: resposta nao roteada
+
+        publicar("{\"ordemServicoId\":7}");
+
+        Message naDlq = receberDaDlq();
+        assertNotNull(naDlq, "sem fila de respostas o comando esgota as tentativas e vai para a DLQ");
+        assertEquals(0, pecaReservada(), "a liberacao em si e idempotente e ja foi aplicada");
     }
 
     @Test
@@ -198,7 +246,9 @@ class LiberarReservaListenerIntegrationTest extends AbstractContainer {
                 .setHeader("traceparent", "00-" + traceId + "-00f067aa0ba902b7-01")
                 .build();
 
-        rabbitTemplate.send(exchange, routingKey, mensagem);
+        // Template sem observacao: o do contexto injeta o proprio traceparent e sobrescreveria o da mensagem, que aqui
+        // faz o papel do relay da outbox do fiap-mecanica (publicador que nao usa observacao no template).
+        new RabbitTemplate(rabbitTemplate.getConnectionFactory()).send(exchange, routingKey, mensagem);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertEquals(0, pecaReservada()));
         // O log "Liberando reservas ..." sai dentro do span do consumidor: carrega o trace id da mensagem, então o
