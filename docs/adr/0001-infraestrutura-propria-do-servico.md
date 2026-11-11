@@ -32,19 +32,20 @@ serviço do [ADR-0007 do fiap-mecanica](https://github.com/ArthurPeruzzo/fiap-me
 
 **4. Broker.** RabbitMQ **no cluster**, no namespace `mensageria`: StatefulSet de uma réplica com disco EBS gp3
 (driver CSI instalado pelo CD), Services `ClusterIP` (o broker e o painel não são expostos) e um Job idempotente que
-cria o vhost `fiap` e os usuários de menor privilégio (`mecanica` só publica no exchange `estoque.comandos`;
-`estoque` é dono dos recursos `estoque.*`). O Amazon MQ foi descartado por estar bloqueado na conta. Como o broker é
-compartilhado (o `fiap-mecanica` publica nele e o serviço de pagamento também), ele está aqui só por enquanto.
+cria o vhost `fiap` e os usuários de menor privilégio (`mecanica` publica em `estoque.comandos` e `cobranca.comandos` e é
+dono de `ordemservico.*`; `estoque` é dono dos recursos `estoque.*`; `cobranca`, dos `cobranca.*`). O Amazon MQ foi descartado por estar bloqueado na conta. Como o broker é
+compartilhado (o `fiap-mecanica` e o `fiap-cobranca` também o usam; o usuário `cobranca` é criado aqui), ele está aqui só por enquanto.
 
-**5. Pipelines.** `build-test` (testes + relatório JaCoCo + **gate de 80%** de linhas), `ci` (pull request: build-test,
-build da imagem, `terraform fmt/validate/plan`) e `cd` (main: build-test → infra → imagem no ECR → broker → deploy). Nada é
-aplicado se testes ou cobertura falharem.
+**5. Pipelines.** `build-test` (testes + relatório JaCoCo + **gate de 80%** de linhas + análise do SonarCloud com Quality Gate),
+`ci` (pull request: build-test, build da imagem, `terraform fmt/validate/plan`) e `cd` (main: infra → imagem no ECR → broker →
+deploy). Os testes rodam só no CI: a `main` exige PR atualizado, com os checks `build-test` e `terraform-plan` verdes, inclusive
+para administradores, então o que chega ao CD já foi testado.
 
 ## Consequências
 
 **Positivas**
 - O serviço é implantável de forma independente, com o próprio banco, imagem e pipeline, como o enunciado pede.
-- Serviços novos (pagamento) copiam este molde sem mexer em repositório central.
+- Serviços novos copiam este molde sem mexer em repositório central (o `fiap-cobranca` foi feito assim).
 - O isolamento de dados é real: instância, credencial e security group próprios.
 
 **Negativas / trade-offs**
@@ -61,8 +62,9 @@ aplicado se testes ou cobertura falharem.
   (idempotente). É uma correção que vale enquanto os nós existirem; a definitiva é um launch template no node group do
   repositório do cluster. Plano B se o disco não funcionar: RabbitMQ numa EC2 com disco EBS. Com broker sem disco
   persistente, uma queda perderia mensagens já marcadas como enviadas pela outbox.
-- Credenciais da Academy expiram (~4 h): o `scripts/refresh-aws-secrets.sh` as republica nos cinco repositórios.
-- Ainda **sem SonarQube** neste serviço (ver README).
+- Credenciais da Academy expiram (~4 h): o `scripts/refresh-aws-secrets.sh` as republica nos seis repositórios.
+- O CD não repete os testes: a garantia vem da proteção da `main` (ver 5). Um push direto na `main` não seria testado, por isso a
+  proteção vale também para administradores.
 
 ## Alternativas consideradas
 
