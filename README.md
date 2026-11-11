@@ -132,7 +132,7 @@ Este repositório é dono de tudo o que é específico do estoque (decisões no 
 | `infra/terraform/app-infra` | Repositório ECR `fiap-estoque` e instância RDS MySQL 8.4 **própria** (`fiap-estoque-db`, banco `estoque`). State `tfstate/estoque.tfstate`. |
 | `k8s/` | Namespace `fiap-estoque`, Deployment, Service `LoadBalancer`, HPA (1–3 réplicas, CPU 70%). ConfigMap e Secret são gerados pelo CD. |
 | `k8s/rabbitmq/` | RabbitMQ no cluster (namespace `mensageria`): StatefulSet + disco EBS gp3, Services `ClusterIP` e Job que cria o vhost `fiap` e os usuários de menor privilégio. |
-| `.github/workflows` | `build-test` (testes + cobertura mínima de 80%), `ci` (pull request) e `cd` (merge na `main`). |
+| `.github/workflows` | `build-test` (testes, cobertura mínima de 80% e Sonar), `ci` (pull request) e `cd` (merge na `main`). |
 
 **Compartilhado, fora deste repositório:** VPC, subnets e o cluster EKS (`fiap-mecanica-infra-k8s`). Numa conta zerada o CD dele
 roda primeiro; este módulo lê o state dele (`tfstate/terraform.tfstate`).
@@ -148,16 +148,18 @@ estoque (para as rotas `/peca` e `/insumo` do gateway):
 2º  fiap-estoque              (RDS próprio, RabbitMQ, estoque)   ┐ independentes entre si:
     fiap-mecanica-infra-db    (RDS do monólito)                  │ podem rodar em paralelo
     fiap-mecanica-lambda                                         ┘
-3º  fiap-mecanica             (cria o gateway já com as rotas do estoque)
+3º  fiap-cobranca             (precisa do broker e do usuário `cobranca` criados pelo CD do estoque)
+4º  fiap-mecanica             (cria o gateway já com as rotas do estoque e da cobrança)
 ```
 
 ### Pipelines
 
-- **CI (pull request):** build, testes e `jacoco:check` (**falha abaixo de 80%** das linhas), build da imagem Docker e
-  `terraform fmt/validate/plan`.
-- **CD (`main`):** `build-test` → `app-infra-apply` (ECR + RDS) → `docker-build-push` (tag = versão do `pom.xml`; não
+- **CI (pull request):** build, testes e `jacoco:check` (**falha abaixo de 80%** das linhas), análise do SonarCloud com Quality Gate,
+  build da imagem Docker e `terraform fmt/validate/plan`.
+- **CD (`main`):** `app-infra-apply` (ECR + RDS) → `docker-build-push` (tag = versão do `pom.xml`; não
   sobrescreve tag já publicada, então **suba a versão a cada merge**) → `rabbitmq-deploy` → `k8s-deploy`.
-- A cobertura aparece no resumo de cada execução e o relatório HTML é publicado como artefato (`jacoco-report`).
+- **Os testes rodam só no CI.** O CD não os repete: a `main` só aceita merge de PR atualizado e com os checks `build-test` e `terraform-plan` verdes, inclusive para administradores.
+- A cobertura aparece no resumo de cada execução do CI e o relatório HTML é publicado como artefato (`jacoco-report`).
 
 ### GitHub Secrets do repositório
 
@@ -168,13 +170,14 @@ estoque (para as rotas `/peca` e `/insumo` do gateway):
 | `JWT_SECRET` | O mesmo do `fiap-mecanica` (JWT de usuário). |
 | `SERVICE_JWT_SECRET` | O mesmo do `fiap-mecanica`, diferente do `JWT_SECRET` (token de serviço). |
 | `NEW_RELIC_LICENSE_KEY` | A mesma do `fiap-mecanica` (traces e métricas OTLP). |
+| `SONAR_TOKEN` | Token do SonarCloud para a análise de qualidade no CI (ver [Qualidade de código](#qualidade-de-código-sonarcloud)). |
 | `RABBITMQ_ADMIN_PASSWORD` | Administrador do broker. |
 | `RABBITMQ_ESTOQUE_PASSWORD` | Senha do usuário `estoque` no broker (este serviço). |
 | `RABBITMQ_MECANICA_PASSWORD` | Senha do usuário `mecanica` no broker; o Job a cria e o `fiap-mecanica` precisa do mesmo valor. |
 | `RABBITMQ_COBRANCA_PASSWORD` | Senha do usuário `cobranca` no broker (opcional: sem ela o usuário não é criado); o `fiap-cobranca` precisa do mesmo valor. |
 
-Use valores **alfanuméricos** nas senhas do RabbitMQ (viram JSON no Job de inicialização). A proteção da `main` (PR obrigatório e
-checagens) é configurada no GitHub.
+Use valores **alfanuméricos** nas senhas do RabbitMQ (viram JSON no Job de inicialização). A proteção da `main` é configurada no GitHub: PR
+obrigatório, branch atualizada, checks `build-test` e `terraform-plan` verdes, valendo também para administradores.
 
 ### Pontos de atenção
 
@@ -186,7 +189,6 @@ checagens) é configurada no GitHub.
   enquanto os nós existirem; a correção definitiva é um launch template com hop limit 2 no node group do
   `fiap-mecanica-infra-k8s`. Plano B, se o disco não funcionar: RabbitMQ numa EC2 com disco EBS. Sem disco persistente, a
   queda do broker perderia mensagens já marcadas como enviadas pela outbox do `fiap-mecanica`.
-- **Sem SonarQube** (nem outra análise estática) ainda.
 - **Integração com o `fiap-mecanica`:** feita no CD dele (`ESTOQUE_URL` interno, `RABBITMQ_*` e as rotas `/peca` e `/insumo` do
   API Gateway). O monólito deve ser o **último** a subir, para encontrar o Service do estoque na primeira passada.
 
@@ -222,7 +224,7 @@ JWT_SECRET=<mesmo-segredo> SERVICE_JWT_SECRET=<segredo-de-servico> ./mvnw spring
 
 ## Testes
 
-O build exige **80% de cobertura de linhas** (`./mvnw verify` aplica o `jacoco:check`; hoje ~97%). Relatório em `target/site/jacoco/index.html`.
+O build exige **80% de cobertura de linhas** (`./mvnw verify` aplica o `jacoco:check` e reprova o CI abaixo disso). Medição de 10/11/2026: **244 testes, 0 falhas, 96,8% das linhas** (687 de 710), 97,2% das instruções e 83,6% dos branches. Relatório em `target/site/jacoco/index.html`; no CI o resumo aparece na execução e o relatório HTML é publicado como artefato (`jacoco-report`).
 
 ```bash
 JAVA_HOME=/home/arthur/.jdks/jdk-25 ./mvnw test                         # tudo (integração exige Docker)
@@ -230,6 +232,17 @@ JAVA_HOME=/home/arthur/.jdks/jdk-25 ./mvnw test -Dtest='!*IntegrationTest'  # s�
 ```
 
 Os testes de integração usam Testcontainers (MySQL) e geram o JWT direto (`TokenTestHelper`).
+
+## Qualidade de código (SonarCloud)
+
+O `build-test` do CI (pull request) roda `./mvnw verify` — testes, relatório do JaCoCo e mínimo de 80% de cobertura — e depois a
+análise do **SonarCloud** (plano gratuito, repositório público) sobre as classes e o relatório já gerados. O passo usa
+`-Dsonar.qualitygate.wait=true`: se o Quality Gate falhar, o pipeline falha. A configuração está nas propriedades `sonar.*` do
+`pom.xml` (projeto `ArthurPeruzzo_fiap-estoque`).
+
+Configuração única, fora do repositório: criar a organização e importar este repositório em <https://sonarcloud.io>, conferir a
+*organization key* e a *project key* (devem bater com o `pom.xml`) e cadastrar o secret **`SONAR_TOKEN`** no repositório. Enquanto o
+secret não existir (ou em PR de fork), o passo é pulado com um aviso e o restante do pipeline segue normalmente.
 
 ## Migrations
 
