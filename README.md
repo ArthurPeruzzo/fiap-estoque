@@ -3,10 +3,9 @@
 Microsserviço de **estoque** (peças, insumos e reservas por ordem de serviço) da Mecânica FIAP.
 Extraído do módulo `estoque` do monólito [`fiap-mecanica`](https://github.com/ArthurPeruzzo/fiap-mecanica).
 
-> **Status:** passo 2 de 5 da extração. Além do CRUD de peças e insumos (`/peca`, `/insumo`), o serviço
-> expõe a API de reservas usada pela ordem de serviço (`/reserva/**`), que o monólito já consome via
-> REST. A API de catálogo (consulta de preço por ids) ainda não foi exposta: o monólito segue lendo o
-> catálogo do módulo embutido.
+> **Status:** extração concluída. Além do CRUD de peças e insumos (`/peca`, `/insumo`), o serviço expõe as APIs internas de
+> reservas (`/reserva/**`) e de catálogo (`/catalogo/**`), que a ordem de serviço consome por REST, e participa da saga de
+> pagamento consumindo comandos do RabbitMQ (ver "Comandos assíncronos e respostas da saga").
 
 ## Stack
 
@@ -20,7 +19,7 @@ Clean Architecture, igual ao monólito: `core/` (domínio, casos de uso, portas)
 
 - `core/domain`: `ItemEstoque` (abstrata), `Peca`, `Insumo`, `Reserva`, `ReservaDeEstoque` (domain service).
 - `core/gateway`: `PecaGateway`, `InsumoGateway`, `ItemEstoqueGateway`, `ReservaGateway`.
-- `core/usecase`: CRUD de peça/insumo e `ReservarItemEstoque`, `ConfirmarReservasOrdemDeServico`, `LiberarReservasOrdemDeServico`.
+- `core/usecase`: CRUD de peça/insumo, `ReservarItemEstoque` e `ReservarItensEstoque` (lote), `ConfirmarReservasOrdemDeServico`, `LiberarReservasOrdemDeServico` e `ConsultarCatalogoPecas`/`ConsultarCatalogoInsumos`.
 - `infra/controller`: pares `XxxCleanController` + `XxxHttpController`.
 - `shared`: exceções, paginação, OpenAPI e segurança stateless.
 
@@ -196,7 +195,7 @@ obrigatório, branch atualizada, checks `build-test` e `terraform-plan` verdes, 
 
 Mesma configuração do `fiap-mecanica` (Fase 3): traces e métricas exportados por OTLP para a New Relic, com o serviço
 aparecendo como `estoque`. A chave vem de `NEW_RELIC_LICENSE_KEY` (Secret no cluster; nunca no código) e os logs ECS
-carregam `trace.id`/`span.id`, correlacionando logs e traces.
+carregam `traceId` e `spanId` (campos de topo do JSON), correlacionando logs e traces.
 
 - **Propagação:** o serviço continua o trace recebido no cabeçalho W3C `traceparent` (teste
   `ContinuaTraceRecebidoIntegrationTest`). O `fiap-mecanica` envia esse cabeçalho nas chamadas HTTP de catálogo e reserva.
@@ -246,6 +245,5 @@ secret não existir (ou em PR de fork), o passo é pulado com um aviso e o resta
 
 ## Migrations
 
-`src/main/resources/db/migration`: `V1` peça, `V2` insumo, `V3` reserva_estoque. O seed de dados
-iniciais entra no passo 3 da extração, junto com a divisão do seed do monólito.
-# fiap-estoque
+`src/main/resources/db/migration`: `V1` peça, `V2` insumo, `V3` reserva_estoque e `V4` seed de dados iniciais (6 peças e os
+insumos de exemplo; a peça 1, Pastilha de Freio, custa R$ 89,90 e é a usada pela bateria de validação em `scripts/validacao/`).
