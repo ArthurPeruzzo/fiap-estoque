@@ -1,5 +1,7 @@
 # fiap-estoque
 
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=ArthurPeruzzo_fiap-estoque&metric=alert_status)](https://sonarcloud.io/project/overview?id=ArthurPeruzzo_fiap-estoque) [![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=ArthurPeruzzo_fiap-estoque&metric=coverage)](https://sonarcloud.io/project/overview?id=ArthurPeruzzo_fiap-estoque)
+
 Microsserviço de **estoque** (peças, insumos e reservas por ordem de serviço) da Mecânica FIAP.
 Extraído do módulo `estoque` do monólito [`fiap-mecanica`](https://github.com/ArthurPeruzzo/fiap-mecanica).
 
@@ -70,7 +72,7 @@ transação (`@Transactional` no controller).
 ### Comandos assíncronos e respostas da saga (RabbitMQ)
 
 O estoque **consome** dois comandos do `fiap-mecanica` (orquestrador da saga de pagamento, ver o
-[ADR-0009](../fiap-mecanica/docs/adr/0009-saga-de-pagamento-orquestrada.md) do monólito) e **responde** a cada um no
+[ADR-0009](https://github.com/ArthurPeruzzo/fiap-mecanica/blob/main/docs/adr/0009-saga-de-pagamento-orquestrada.md) do monólito) e **responde** a cada um no
 exchange da OS:
 
 | Comando (exchange `estoque.comandos`, direct) | Chave | Fila (DLQ `<fila>.dlq`, DLX `estoque.comandos.dlx`) | Efeito | Resposta (exchange `ordemservico.eventos`) |
@@ -237,7 +239,7 @@ Os testes de integração usam Testcontainers (MySQL) e geram o JWT direto (`Tok
 O `build-test` do CI (pull request) roda `./mvnw verify` — testes, relatório do JaCoCo e mínimo de 80% de cobertura — e depois a
 análise do **SonarCloud** (plano gratuito, repositório público) sobre as classes e o relatório já gerados. O passo usa
 `-Dsonar.qualitygate.wait=true`: se o Quality Gate falhar, o pipeline falha. A configuração está nas propriedades `sonar.*` do
-`pom.xml` (projeto `ArthurPeruzzo_fiap-estoque`).
+`pom.xml` (projeto `ArthurPeruzzo_fiap-estoque`). Resultado: [painel do projeto no SonarCloud](https://sonarcloud.io/project/overview?id=ArthurPeruzzo_fiap-estoque) (Quality Gate e cobertura da `main`; os pull requests têm a própria análise).
 
 Configuração única, fora do repositório: criar a organização e importar este repositório em <https://sonarcloud.io>, conferir a
 *organization key* e a *project key* (devem bater com o `pom.xml`) e cadastrar o secret **`SONAR_TOKEN`** no repositório. Enquanto o
@@ -246,4 +248,4 @@ secret não existir (ou em PR de fork), o passo é pulado com um aviso e o resta
 ## Migrations
 
 `src/main/resources/db/migration`: `V1` peça, `V2` insumo, `V3` reserva_estoque e `V4` seed de dados iniciais (6 peças e os
-insumos de exemplo; a peça 1, Pastilha de Freio, custa R$ 89,90 e é a usada pela bateria de validação em `scripts/validacao/`).
+insumos de exemplo; a peça 1, Pastilha de Freio, custa R$ 89,90 e é a usada nas validações ponta a ponta).
