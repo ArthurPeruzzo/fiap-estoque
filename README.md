@@ -231,6 +231,17 @@ JAVA_HOME=/home/arthur/.jdks/jdk-25 ./mvnw test -Dtest='!*IntegrationTest'  # s�
 
 Os testes de integração usam Testcontainers (MySQL) e geram o JWT direto (`TokenTestHelper`).
 
+## Qualidade de código (SonarCloud)
+
+O `build-test` (usado por CI e CD) roda `./mvnw verify` — testes, relatório do JaCoCo e mínimo de 80% de cobertura — e depois a
+análise do **SonarCloud** (plano gratuito, repositório público) sobre as classes e o relatório já gerados. O passo usa
+`-Dsonar.qualitygate.wait=true`: se o Quality Gate falhar, o pipeline falha. A configuração está nas propriedades `sonar.*` do
+`pom.xml` (projeto `ArthurPeruzzo_fiap-estoque`).
+
+Configuração única, fora do repositório: criar a organização e importar este repositório em <https://sonarcloud.io>, conferir a
+*organization key* e a *project key* (devem bater com o `pom.xml`) e cadastrar o secret **`SONAR_TOKEN`** no repositório. Enquanto o
+secret não existir (ou em PR de fork), o passo é pulado com um aviso e o restante do pipeline segue normalmente.
+
 ## Migrations
 
 `src/main/resources/db/migration`: `V1` peça, `V2` insumo, `V3` reserva_estoque. O seed de dados
